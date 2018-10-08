@@ -8,11 +8,9 @@
 #ifndef UA_SERVER_PUBSUB_H
 #define UA_SERVER_PUBSUB_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_server.h"
+
+_UA_BEGIN_DECLS
 
 #ifdef UA_ENABLE_PUBSUB
 
@@ -70,8 +68,22 @@ extern "C" {
  *                 |    +-----------------+
  *                 +----> UA_DataSetField |  UA_PublishedDataSet_addDataSetField
  *                      +-----------------+
+ * PubSub compile flags
+ * --------------------
+ *
+ * **UA_ENABLE_PUBSUB**
+ *  Enable the experimental OPC UA PubSub support. The option will include the PubSub UDP multicast plugin. Disabled by default.
+ * **UA_ENABLE_PUBSUB_DELTAFRAMES**
+ *  The PubSub messages differentiate between keyframe (all published values contained) and deltaframe (only changed values contained) messages.
+ *  Deltaframe messages creation consumes some additional ressources and can be disabled with this flag. Disabled by default.
+ *  Compile the human-readable name of the StatusCodes into the binary. Disabled by default.
+ * **UA_ENABLE_PUBSUB_INFORMATIONMODEL**
+ *  Enable the information model representation of the PubSub configuration. For more details take a look at the following section `PubSub Information Model Representation`. Disabled by default.
+ *
  * PubSub Information Model Representation
- * -----------
+ * ----------------------------------------
+ * .. _pubsub_informationmodel:
+ *
  * The complete PubSub configuration is available inside the information model.
  * The entry point is the node 'PublishSubscribe, located under the Server node.
  * The standard defines for PubSub no new Service set. The configuration can optionally
@@ -349,8 +361,6 @@ UA_Server_removeDataSetWriter(UA_Server *server, const UA_NodeId dsw);
 
 #endif /* UA_ENABLE_PUBSUB */
     
-#ifdef __cplusplus
-} // extern "C"
-#endif
+_UA_END_DECLS
 
 #endif /* UA_SERVER_PUBSUB_H */

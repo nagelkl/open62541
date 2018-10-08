@@ -15,12 +15,10 @@
 #ifndef UA_SERVICES_H_
 #define UA_SERVICES_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_server.h"
 #include "ua_session.h"
+
+_UA_BEGIN_DECLS
 
 /**
  * .. _services:
@@ -408,6 +406,12 @@ void Service_SetMonitoringMode(UA_Server *server, UA_Session *session,
                                const UA_SetMonitoringModeRequest *request,
                                UA_SetMonitoringModeResponse *response);
 
+#ifdef UA_ENABLE_HISTORIZING
+void Service_HistoryRead(UA_Server *server, UA_Session *session,
+                         const UA_HistoryReadRequest *request,
+                         UA_HistoryReadResponse *response);
+#endif
+
 /**
  * SetTriggering Service
  * ^^^^^^^^^^^^^^^^^^^^^
@@ -488,8 +492,6 @@ void Service_DeleteSubscriptions(UA_Server *server, UA_Session *session,
 
 #endif /* UA_ENABLE_SUBSCRIPTIONS */
 
-#ifdef __cplusplus
-} // extern "C"
-#endif
+_UA_END_DECLS
 
 #endif /* UA_SERVICES_H_ */

@@ -9,11 +9,13 @@
 #ifndef UA_CLIENT_CONFIG_H
 #define UA_CLIENT_CONFIG_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
+#include "ua_config.h"
 #include "ua_plugin_network.h"
+
+_UA_BEGIN_DECLS
+
+struct UA_Client;
+typedef struct UA_Client UA_Client;
 
 /**
  * .. _client-config:
@@ -46,107 +48,52 @@ typedef enum {
     UA_CLIENTSTATE_SESSION_RENEWED       /* A session with the server is open (renewed) */
 } UA_ClientState;
 
-
-struct UA_Client;
-typedef struct UA_Client UA_Client;
-
-typedef void (*UA_ClientAsyncServiceCallback)(UA_Client *client, void *userdata,
-        UA_UInt32 requestId, void *response);
-/*
- * Repeated Callbacks
- * ------------------ */
-typedef void (*UA_ClientCallback)(UA_Client *client, void *data);
-
-UA_StatusCode
-UA_Client_addRepeatedCallback(UA_Client *Client, UA_ClientCallback callback,
-        void *data, UA_UInt32 interval, UA_UInt64 *callbackId);
-
-UA_StatusCode
-UA_Client_changeRepeatedCallbackInterval(UA_Client *Client,
-        UA_UInt64 callbackId, UA_UInt32 interval);
-
-UA_StatusCode UA_Client_removeRepeatedCallback(UA_Client *Client,
-        UA_UInt64 callbackId);
-
-/**
- * Client Lifecycle callback
- * ^^^^^^^^^^^^^^^^^^^^^^^^^ */
-
-typedef void (*UA_ClientStateCallback)(UA_Client *client, UA_ClientState clientState);
-
-/**
- * Subscription Inactivity callback
- * ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ */
-
-#ifdef UA_ENABLE_SUBSCRIPTIONS
-typedef void (*UA_SubscriptionInactivityCallback)(UA_Client *client, UA_UInt32 subscriptionId, void *subContext);
-#endif
-
-/**
- * Inactivity callback
- * ^^^^^^^^^^^^^^^^^^^ */
-
-typedef void (*UA_InactivityCallback)(UA_Client *client);
-
-/**
- * Client Configuration Data
- * ^^^^^^^^^^^^^^^^^^^^^^^^^ */
-
-typedef struct UA_ClientConfig {
+typedef struct {
     UA_UInt32 timeout;               /* ASync + Sync response timeout in ms */
     UA_UInt32 secureChannelLifeTime; /* Lifetime in ms (then the channel needs
                                         to be renewed) */
     UA_Logger logger;
     UA_ConnectionConfig localConnectionConfig;
+
+    /* Callbacks for async connection handshakes */
     UA_ConnectClientConnection connectionFunc;
     UA_ConnectClientConnection initConnectionFunc;
-    UA_ClientCallback pollConnectionFunc;
+    void (*pollConnectionFunc)(UA_Client *client, void *context);
 
     /* Custom DataTypes */
     size_t customDataTypesSize;
     const UA_DataType *customDataTypes;
 
-    /* Callback function */
-    UA_ClientStateCallback stateCallback;
-#ifdef UA_ENABLE_SUBSCRIPTIONS
-    /**
-     * When outStandingPublishRequests is greater than 0,
-     * the server automatically create publishRequest when
-     * UA_Client_runAsync is called. If the client don't receive
-     * a publishResponse after :
-     *     (sub->publishingInterval * sub->maxKeepAliveCount) +
-     *     client->config.timeout)
-     * then, the client call subscriptionInactivityCallback
-     * The connection can be closed, this in an attempt to
-     * recreate a healthy connection. */
-    UA_SubscriptionInactivityCallback subscriptionInactivityCallback;
-#endif
+    /* Callback for state changes */
+    void (*stateCallback)(UA_Client *client, UA_ClientState clientState);
 
-    /** 
-     * When connectivityCheckInterval is greater than 0,
-     * every connectivityCheckInterval (in ms), a async read request
-     * is performed on the server. inactivityCallback is called
-     * when the client receive no response for this read request
-     * The connection can be closed, this in an attempt to
-     * recreate a healthy connection. */
-    UA_InactivityCallback inactivityCallback;
+   /* Connectivity check interval in ms.
+    * 0 = background task disabled */
+    UA_UInt32 connectivityCheckInterval;
+
+    /* When connectivityCheckInterval is greater than 0, every
+     * connectivityCheckInterval (in ms), a async read request is performed on
+     * the server. inactivityCallback is called when the client receive no
+     * response for this read request The connection can be closed, this in an
+     * attempt to recreate a healthy connection. */
+    void (*inactivityCallback)(UA_Client *client);
 
     void *clientContext;
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
-    /* number of PublishResponse standing in the sever */
-    /* 0 = background task disabled                    */
+    /* Number of PublishResponse queued up in the server */
     UA_UInt16 outStandingPublishRequests;
+
+    /* If the client does not receive a PublishResponse after the defined delay
+     * of ``(sub->publishingInterval * sub->maxKeepAliveCount) +
+     * client->config.timeout)``, then subscriptionInactivityCallback is called
+     * for the subscription.. */
+    void (*subscriptionInactivityCallback)(UA_Client *client,
+                                           UA_UInt32 subscriptionId,
+                                           void *subContext);
 #endif
-   /**
-     * connectivity check interval in ms
-     * 0 = background task disabled */
-    UA_UInt32 connectivityCheckInterval;
 } UA_ClientConfig;
 
-#ifdef __cplusplus
-}
-#endif
-
+_UA_END_DECLS
 
 #endif /* UA_CLIENT_CONFIG_H */

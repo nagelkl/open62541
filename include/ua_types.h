@@ -16,13 +16,11 @@
 #ifndef UA_TYPES_H_
 #define UA_TYPES_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_config.h"
 #include "ua_constants.h"
 #include "ua_statuscodes.h"
+
+_UA_BEGIN_DECLS
 
 #define UA_BUILTIN_TYPES_COUNT 25U
 
@@ -301,8 +299,8 @@ typedef UA_String UA_XmlElement;
  * An identifier for a node in the address space of an OPC UA Server. */
 enum UA_NodeIdType {
     UA_NODEIDTYPE_NUMERIC    = 0, /* In the binary encoding, this can also
-                                     become 1 or 2 (2byte and 4byte encoding of
-                                     small numeric nodeids) */
+                                   * become 1 or 2 (two-byte and four-byte
+                                   * encoding of small numeric nodeids) */
     UA_NODEIDTYPE_STRING     = 3,
     UA_NODEIDTYPE_GUID       = 4,
     UA_NODEIDTYPE_BYTESTRING = 5
@@ -942,8 +940,6 @@ UA_Guid UA_EXPORT UA_Guid_random(void);     /* no cryptographic entropy */
  *
  *    types_generated */
 
-#ifdef __cplusplus
-} // extern "C"
-#endif
+_UA_END_DECLS
 
 #endif /* UA_TYPES_H_ */

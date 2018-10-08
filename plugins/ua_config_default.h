@@ -9,13 +9,11 @@
 #ifndef UA_CONFIG_DEFAULT_H_
 #define UA_CONFIG_DEFAULT_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_server.h"
 #include "ua_server_config.h"
 #include "ua_client.h"
+
+_UA_BEGIN_DECLS
 
 /**********************/
 /* Default Connection */
@@ -26,8 +24,6 @@ extern const UA_EXPORT UA_ConnectionConfig UA_ConnectionConfig_default;
 /*************************/
 /* Default Server Config */
 /*************************/
-
-
 
 /* Creates a new server config with one endpoint and custom buffer size.
  *
@@ -44,7 +40,8 @@ extern const UA_EXPORT UA_ConnectionConfig UA_ConnectionConfig_default;
  *
  */
 UA_EXPORT UA_ServerConfig *
-UA_ServerConfig_new_customBuffer(UA_UInt16 portNumber, const UA_ByteString *certificate, UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize);
+UA_ServerConfig_new_customBuffer(UA_UInt16 portNumber, const UA_ByteString *certificate,
+                                 UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize);
 
 /* Creates a new server config with one endpoint.
  * 
@@ -117,8 +114,6 @@ UA_ServerConfig_delete(UA_ServerConfig *config);
 
 extern const UA_EXPORT UA_ClientConfig UA_ClientConfig_default;
 
-#ifdef __cplusplus
-}
-#endif
+_UA_END_DECLS
 
 #endif /* UA_CONFIG_DEFAULT_H_ */

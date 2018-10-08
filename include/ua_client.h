@@ -17,10 +17,6 @@
 #ifndef UA_CLIENT_H_
 #define UA_CLIENT_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_types.h"
 #include "ua_types_generated.h"
 #include "ua_types_generated_handling.h"
@@ -29,6 +25,8 @@ extern "C" {
 #include "ua_plugin_log.h"
 #include "ua_client_config.h"
 #include "ua_nodeids.h"
+
+_UA_BEGIN_DECLS
 
 /**
  * .. _client:
@@ -81,9 +79,18 @@ UA_Client_secure_new(UA_ClientConfig config, UA_ByteString certificate,
 UA_ClientState UA_EXPORT
 UA_Client_getState(UA_Client *client);
 
+/* Get the client configuration */
+UA_EXPORT UA_ClientConfig *
+UA_Client_getConfig(UA_Client *client);
+
 /* Get the client context */
-void UA_EXPORT *
-UA_Client_getContext(UA_Client *client);
+static UA_INLINE void *
+UA_Client_getContext(UA_Client *client) {
+    UA_ClientConfig *config = UA_Client_getConfig(client);
+    if(!config)
+        return NULL;
+    return config->clientContext;
+}
 
 /* Reset a client */
 void UA_EXPORT
@@ -96,6 +103,9 @@ UA_Client_delete(UA_Client *client);
 /**
  * Connect to a Server
  * ------------------- */
+
+typedef void (*UA_ClientAsyncServiceCallback)(UA_Client *client, void *userdata,
+        UA_UInt32 requestId, void *response);
 
 /* Connect to the server
  *
@@ -137,12 +147,10 @@ UA_StatusCode UA_EXPORT
 UA_Client_disconnect_async(UA_Client *client, UA_UInt32 *requestId);
 
 /* Close a connection to the selected server */
-UA_StatusCode UA_EXPORT
-UA_Client_close(UA_Client *client);
-
-/* Renew the underlying secure channel */
-UA_StatusCode UA_EXPORT
-UA_Client_manuallyRenewSecureChannel(UA_Client *client);
+UA_DEPRECATED static UA_INLINE UA_StatusCode
+UA_Client_close(UA_Client *client) {
+    return UA_Client_disconnect(client);
+}
 
 /**
  * Discovery
@@ -384,13 +392,6 @@ UA_Client_Service_queryNext(UA_Client *client,
  * be made without waiting for a response first. Responess may come in a
  * different ordering. */
 
-/* Listen on the network and process arriving asynchronous responses in the
- * background. Internal housekeeping and subscription management is done as
- * well. */
-
-/*UA_StatusCode UA_EXPORT
-UA_Client_runAsync(UA_Client *client, UA_UInt16 timeout);*/
-
 /* Use the type versions of this method. See below. However, the general
  * mechanism of async service calls is explained here.
  *
@@ -418,16 +419,26 @@ __UA_Client_AsyncService(UA_Client *client, const void *request,
                          const UA_DataType *responseType,
                          void *userdata, UA_UInt32 *requestId);
 
-/* For async connecting
- * */
 UA_StatusCode UA_EXPORT
 UA_Client_sendAsyncRequest(UA_Client *client, const void *request,
         const UA_DataType *requestType, UA_ClientAsyncServiceCallback callback,
-const UA_DataType *responseType, void *userdata, UA_UInt32 *requestId);
+        const UA_DataType *responseType, void *userdata, UA_UInt32 *requestId);
 
-
+/* Listen on the network and process arriving asynchronous responses in the
+ * background. Internal housekeeping, renewal of SecureChannels and subscription
+ * management is done as well. */
 UA_StatusCode UA_EXPORT
 UA_Client_run_iterate(UA_Client *client, UA_UInt16 timeout);
+
+UA_DEPRECATED static UA_INLINE UA_StatusCode
+UA_Client_runAsync(UA_Client *client, UA_UInt16 timeout) {
+    return UA_Client_run_iterate(client, timeout);
+}
+
+UA_DEPRECATED static UA_INLINE UA_StatusCode
+UA_Client_manuallyRenewSecureChannel(UA_Client *client) {
+    return UA_Client_run_iterate(client, 0);
+}
 
 /* Use the type versions of this method. See below. However, the general
  * mechanism of async service calls is explained here.
@@ -456,6 +467,27 @@ __UA_Client_AsyncServiceEx(UA_Client *client, const void *request,
                            void *userdata, UA_UInt32 *requestId,
                            UA_UInt32 timeout);
 
+/**
+ * Repeated Callbacks
+ * ------------------
+ * Repeated callbacks can be attached to a client and will be executed in the
+ * defined interval. */
+
+typedef void (*UA_ClientCallback)(UA_Client *client, void *data);
+
+UA_StatusCode
+UA_Client_addRepeatedCallback(UA_Client *client,
+                              UA_ClientCallback callback,
+                              void *data, UA_UInt32 interval,
+                              UA_UInt64 *callbackId);
+
+UA_StatusCode
+UA_Client_changeRepeatedCallbackInterval(UA_Client *client,
+                                         UA_UInt64 callbackId,
+                                         UA_UInt32 interval);
+
+UA_StatusCode UA_Client_removeRepeatedCallback(UA_Client *client,
+                                               UA_UInt64 callbackId);
 
 /**
  * .. toctree::
@@ -463,8 +495,6 @@ __UA_Client_AsyncServiceEx(UA_Client *client, const void *request,
  *    client_highlevel
  *    client_subscriptions */
 
-#ifdef __cplusplus
-} // extern "C"
-#endif
+_UA_END_DECLS
 
 #endif /* UA_CLIENT_H_ */

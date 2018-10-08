@@ -19,6 +19,12 @@
 #include "ua_pubsub_ns0.h"
 #endif
 
+/* Forward declaration */
+static void
+UA_WriterGroup_deleteMembers(UA_Server *server, UA_WriterGroup *writerGroup);
+static void
+UA_DataSetField_deleteMembers(UA_DataSetField *field);
+
 /**********************************************/
 /*               Connection                   */
 /**********************************************/
@@ -157,7 +163,9 @@ UA_Server_removeWriterGroup(UA_Server *server, const UA_NodeId writerGroup){
 #ifdef UA_ENABLE_PUBSUB_INFORMATIONMODEL
     removeWriterGroupRepresentation(server, wg);
 #endif
+
     UA_WriterGroup_deleteMembers(server, wg);
+    LIST_REMOVE(wg, listEntry);
     UA_free(wg);
     return UA_STATUSCODE_GOOD;
 }
@@ -260,19 +268,26 @@ UA_Server_addDataSetField(UA_Server *server, const UA_NodeId publishedDataSet,
                           const UA_DataSetFieldConfig *fieldConfig,
                           UA_NodeId *fieldIdentifier) {
     UA_StatusCode retVal = UA_STATUSCODE_GOOD;
+	UA_DataSetFieldResult result = {UA_STATUSCODE_BADINVALIDARGUMENT, {0, 0}};
     if(!fieldConfig)
-        return (UA_DataSetFieldResult) {UA_STATUSCODE_BADINVALIDARGUMENT, {0, 0}};
+        return result;
 
     UA_PublishedDataSet *currentDataSet = UA_PublishedDataSet_findPDSbyId(server, publishedDataSet);
-    if(currentDataSet == NULL)
-        return (UA_DataSetFieldResult) {UA_STATUSCODE_BADNOTFOUND, {0, 0}};
+	if(currentDataSet == NULL){
+		result.result = UA_STATUSCODE_BADNOTFOUND;
+        return result;
+	}
 
-    if(currentDataSet->config.publishedDataSetType != UA_PUBSUB_DATASET_PUBLISHEDITEMS)
-        return (UA_DataSetFieldResult) {UA_STATUSCODE_BADNOTIMPLEMENTED, {0, 0}};
+	if(currentDataSet->config.publishedDataSetType != UA_PUBSUB_DATASET_PUBLISHEDITEMS){
+		result.result = UA_STATUSCODE_BADNOTIMPLEMENTED;
+        return result;
+	}
 
     UA_DataSetField *newField = (UA_DataSetField *) UA_calloc(1, sizeof(UA_DataSetField));
-    if(!newField)
-        return (UA_DataSetFieldResult) {UA_STATUSCODE_BADINTERNALERROR, {0, 0}};
+	if(!newField){
+		result.result = UA_STATUSCODE_BADINTERNALERROR;
+        return result;
+	}
 
     UA_DataSetFieldConfig tmpFieldConfig;
     retVal |= UA_DataSetFieldConfig_copy(fieldConfig, &tmpFieldConfig);
@@ -288,22 +303,23 @@ UA_Server_addDataSetField(UA_Server *server, const UA_NodeId publishedDataSet,
     if(newField->config.field.variable.promotedField)
         currentDataSet->promotedFieldsCount++;
     currentDataSet->fieldSize++;
-    UA_DataSetFieldResult result =
-        {retVal, {currentDataSet->dataSetMetaData.configurationVersion.majorVersion,
-                  currentDataSet->dataSetMetaData.configurationVersion.minorVersion}};
+	result.result = retVal;
+	result.configurationVersion.majorVersion = currentDataSet->dataSetMetaData.configurationVersion.majorVersion;
+	result.configurationVersion.minorVersion = currentDataSet->dataSetMetaData.configurationVersion.minorVersion;
     return result;
 }
 
 UA_DataSetFieldResult
 UA_Server_removeDataSetField(UA_Server *server, const UA_NodeId dsf) {
     UA_DataSetField *currentField = UA_DataSetField_findDSFbyId(server, dsf);
-    if(!currentField)
-        return (UA_DataSetFieldResult) {UA_STATUSCODE_BADNOTFOUND, {0, 0}};
+    UA_DataSetFieldResult result = {UA_STATUSCODE_BADNOTFOUND, {0, 0}};
+	if(!currentField)
+        return result;
 
     UA_PublishedDataSet *parentPublishedDataSet =
         UA_PublishedDataSet_findPDSbyId(server, currentField->publishedDataSet);
     if(!parentPublishedDataSet)
-        return (UA_DataSetFieldResult) {UA_STATUSCODE_BADNOTFOUND, {0, 0}};
+        return result;
 
     parentPublishedDataSet->fieldSize--;
     if(currentField->config.field.variable.promotedField)
@@ -312,11 +328,14 @@ UA_Server_removeDataSetField(UA_Server *server, const UA_NodeId dsf) {
     /* update major version of PublishedDataSet */
     parentPublishedDataSet->dataSetMetaData.configurationVersion.majorVersion =
         UA_PubSubConfigurationVersionTimeDifference();
+
     UA_DataSetField_deleteMembers(currentField);
+    LIST_REMOVE(currentField, listEntry);
     UA_free(currentField);
-    UA_DataSetFieldResult result =
-        {UA_STATUSCODE_GOOD, {parentPublishedDataSet->dataSetMetaData.configurationVersion.majorVersion,
-                              parentPublishedDataSet->dataSetMetaData.configurationVersion.minorVersion}};
+
+	result.result = UA_STATUSCODE_GOOD;
+	result.configurationVersion.majorVersion = parentPublishedDataSet->dataSetMetaData.configurationVersion.majorVersion;
+	result.configurationVersion.minorVersion = parentPublishedDataSet->dataSetMetaData.configurationVersion.minorVersion;
     return result;
 }
 
@@ -387,17 +406,16 @@ UA_DataSetWriterConfig_deleteMembers(UA_DataSetWriterConfig *pdsConfig) {
     UA_ExtensionObject_deleteMembers(&pdsConfig->messageSettings);
 }
 
-void
-UA_DataSetWriter_deleteMembers(UA_Server *server, UA_DataSetWriter *dataSetWriter){
+static void
+UA_DataSetWriter_deleteMembers(UA_Server *server, UA_DataSetWriter *dataSetWriter) {
     UA_DataSetWriterConfig_deleteMembers(&dataSetWriter->config);
     //delete DataSetWriter
     UA_NodeId_deleteMembers(&dataSetWriter->identifier);
     UA_NodeId_deleteMembers(&dataSetWriter->linkedWriterGroup);
     UA_NodeId_deleteMembers(&dataSetWriter->connectedDataSet);
-    LIST_REMOVE(dataSetWriter, listEntry);
 #ifdef UA_ENABLE_PUBSUB_DELTAFRAMES
     //delete lastSamples store
-    for(size_t i = 0; i < dataSetWriter->lastSamplesCount; i++){
+    for(size_t i = 0; i < dataSetWriter->lastSamplesCount; i++) {
         UA_DataValue_deleteMembers(&dataSetWriter->lastSamples[i].value);
     }
     UA_free(dataSetWriter->lastSamples);
@@ -491,7 +509,7 @@ UA_WriterGroupConfig_deleteMembers(UA_WriterGroupConfig *writerGroupConfig){
     UA_free(writerGroupConfig->groupProperties);
 }
 
-void
+static void
 UA_WriterGroup_deleteMembers(UA_Server *server, UA_WriterGroup *writerGroup) {
     UA_WriterGroupConfig_deleteMembers(&writerGroup->config);
     //delete WriterGroup
@@ -500,7 +518,6 @@ UA_WriterGroup_deleteMembers(UA_Server *server, UA_WriterGroup *writerGroup) {
     LIST_FOREACH_SAFE(dataSetWriter, &writerGroup->writers, listEntry, tmpDataSetWriter){
         UA_Server_removeDataSetWriter(server, dataSetWriter->identifier);
     }
-    LIST_REMOVE(writerGroup, listEntry);
     UA_NodeId_deleteMembers(&writerGroup->linkedConnection);
     UA_NodeId_deleteMembers(&writerGroup->identifier);
 }
@@ -574,8 +591,10 @@ UA_Server_removeDataSetWriter(UA_Server *server, const UA_NodeId dsw){
 #ifdef UA_ENABLE_PUBSUB_INFORMATIONMODEL
     removeDataSetWriterRepresentation(server, dataSetWriter);
 #endif
+
     //remove DataSetWriter from group
     UA_DataSetWriter_deleteMembers(server, dataSetWriter);
+    LIST_REMOVE(dataSetWriter, listEntry);
     UA_free(dataSetWriter);
     return UA_STATUSCODE_GOOD;
 }
@@ -635,13 +654,13 @@ UA_DataSetFieldConfig_deleteMembers(UA_DataSetFieldConfig *dataSetFieldConfig){
     }
 }
 
-void UA_DataSetField_deleteMembers(UA_DataSetField *field) {
+static void
+UA_DataSetField_deleteMembers(UA_DataSetField *field) {
     UA_DataSetFieldConfig_deleteMembers(&field->config);
     //delete DataSetField
     UA_NodeId_deleteMembers(&field->identifier);
     UA_NodeId_deleteMembers(&field->publishedDataSet);
     UA_FieldMetaData_deleteMembers(&field->fieldMetaData);
-    LIST_REMOVE(field, listEntry);
 }
 
 /*********************************************************/
@@ -990,6 +1009,11 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
         UA_LOG_ERROR(server->config.logger, UA_LOGCATEGORY_SERVER, "Unknown encoding type.");
         return;
     }
+    UA_PubSubConnection *connection = UA_PubSubConnection_findConnectionbyId(server, writerGroup->linkedConnection);
+    if(!connection){
+        UA_LOG_ERROR(server->config.logger, UA_LOGCATEGORY_SERVER, "Publish failed. PubSubConnection invalid.");
+        return;
+    }
     //prevent error if the maxEncapsulatedDataSetMessageCount is set to 0->1
     writerGroup->config.maxEncapsulatedDataSetMessageCount = (UA_UInt16) (writerGroup->config.maxEncapsulatedDataSetMessageCount == 0 ||
                                                                           writerGroup->config.maxEncapsulatedDataSetMessageCount > UA_BYTE_MAX
@@ -1056,6 +1080,14 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
                 (combinedNetworkMessageCount % writerGroup->config.maxEncapsulatedDataSetMessageCount) == 0 ? 0 : 1);
         networkMessageCount += combinedNetworkMessageCount;
     }
+    if(networkMessageCount < 1){
+        for(size_t i = 0; i < writerGroup->writersCount; i++){
+            UA_DataSetMessage_free(&dsmStore[i]);
+        }
+        UA_free(dsmStore);
+        return;
+    }
+
     //Alloc memory for the NetworkMessages on the stack
     UA_STACKARRAY(UA_NetworkMessage, nmStore, networkMessageCount);
     memset(nmStore, 0, networkMessageCount * sizeof(UA_NetworkMessage));
@@ -1092,11 +1124,6 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
             nmStore[i].payload.dataSetPayload.dataSetMessages = &dsmStore[currentDSMPosition];
             nmStore->payload.dataSetPayload.sizes = &dsmSizes[currentDSMPosition];
             nmStore->payloadHeader.dataSetPayloadHeader.dataSetWriterIds = &dsWriterIds[currentDSMPosition];
-        }
-        UA_PubSubConnection *connection = UA_PubSubConnection_findConnectionbyId(server, writerGroup->linkedConnection);
-        if(!connection){
-            UA_LOG_ERROR(server->config.logger, UA_LOGCATEGORY_SERVER, "Publish failed. PubSubConnection invalid.");
-            return;
         }
         //send the prepared messages
         UA_ByteString buf;

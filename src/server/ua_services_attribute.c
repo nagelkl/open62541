@@ -22,6 +22,10 @@
 #include "ua_types_encoding_binary.h"
 #include "ua_services.h"
 
+#ifdef UA_ENABLE_HISTORIZING
+#include "ua_plugin_historydatabase.h"
+#endif
+
 /******************/
 /* Access Control */
 /******************/
@@ -29,7 +33,7 @@
 static UA_UInt32
 getUserWriteMask(UA_Server *server, const UA_Session *session,
                  const UA_Node *node) {
-    if(session == &adminSession)
+    if(session == &server->adminSession)
         return 0xFFFFFFFF; /* the local admin user has all rights */
     return node->writeMask &
         server->config.accessControl.getUserRightsMask(server, &server->config.accessControl,
@@ -40,7 +44,7 @@ getUserWriteMask(UA_Server *server, const UA_Session *session,
 static UA_Byte
 getAccessLevel(UA_Server *server, const UA_Session *session,
                const UA_VariableNode *node) {
-    if(session == &adminSession)
+    if(session == &server->adminSession)
         return 0xFF; /* the local admin user has all rights */
     return node->accessLevel;
 }
@@ -48,7 +52,7 @@ getAccessLevel(UA_Server *server, const UA_Session *session,
 static UA_Byte
 getUserAccessLevel(UA_Server *server, const UA_Session *session,
                    const UA_VariableNode *node) {
-    if(session == &adminSession)
+    if(session == &server->adminSession)
         return 0xFF; /* the local admin user has all rights */
     return node->accessLevel &
         server->config.accessControl.getUserAccessLevel(server, &server->config.accessControl,
@@ -59,7 +63,7 @@ getUserAccessLevel(UA_Server *server, const UA_Session *session,
 static UA_Boolean
 getUserExecutable(UA_Server *server, const UA_Session *session,
                   const UA_MethodNode *node) {
-    if(session == &adminSession)
+    if(session == &server->adminSession)
         return true; /* the local admin user has all rights */
     return node->executable &
         server->config.accessControl.getUserExecutable(server, &server->config.accessControl,
@@ -190,10 +194,10 @@ static const UA_String jsonEncoding = {sizeof("Default JSON")-1, (UA_Byte*)"Defa
 /* Returns a datavalue that may point into the node via the
  * UA_VARIANT_DATA_NODELETE tag. Don't access the returned DataValue once the
  * node has been released! */
-static void
-Read(const UA_Node *node, UA_Server *server, UA_Session *session,
-     UA_TimestampsToReturn timestampsToReturn,
-     const UA_ReadValueId *id, UA_DataValue *v) {
+void
+ReadWithNode(const UA_Node *node, UA_Server *server, UA_Session *session,
+             UA_TimestampsToReturn timestampsToReturn,
+             const UA_ReadValueId *id, UA_DataValue *v) {
     UA_LOG_DEBUG_SESSION(server->config.logger, session,
                          "Read the attribute %i", id->attributeId);
 
@@ -261,8 +265,14 @@ Read(const UA_Node *node, UA_Server *server, UA_Session *session,
         break;
     case UA_ATTRIBUTEID_EVENTNOTIFIER:
         CHECK_NODECLASS(UA_NODECLASS_VIEW | UA_NODECLASS_OBJECT);
-        setScalarNoDelete(&v->value, &((const UA_ViewNode*)node)->eventNotifier,
-                          &UA_TYPES[UA_TYPES_BYTE]);
+        if(node->nodeClass == UA_NODECLASS_VIEW) {
+            setScalarNoDelete(&v->value, &((const UA_ViewNode*)node)->eventNotifier,
+                              &UA_TYPES[UA_TYPES_BYTE]);
+        }
+        else{
+            setScalarNoDelete(&v->value, &((const UA_ObjectNode*)node)->eventNotifier,
+                              &UA_TYPES[UA_TYPES_BYTE]);
+        }
         break;
     case UA_ATTRIBUTEID_VALUE: {
         CHECK_NODECLASS(UA_NODECLASS_VARIABLE | UA_NODECLASS_VARIABLETYPE);
@@ -376,7 +386,7 @@ Operation_Read(UA_Server *server, UA_Session *session, UA_MessageContext *mc,
 
     /* Perform the read operation */
     if(node) {
-        Read(node, server, session, timestampsToReturn, id, &dv);
+        ReadWithNode(node, server, session, timestampsToReturn, id, &dv);
     } else {
         dv.hasStatus = true;
         dv.status = UA_STATUSCODE_BADNODEIDUNKNOWN;
@@ -456,7 +466,7 @@ UA_Server_readWithSession(UA_Server *server, UA_Session *session,
     }
 
     /* Perform the read operation */
-    Read(node, server, session, timestampsToReturn, item, &dv);
+    ReadWithNode(node, server, session, timestampsToReturn, item, &dv);
 
     /* Do we have to copy the result before releasing the node? */
     if(dv.hasValue && dv.value.storageType == UA_VARIANT_DATA_NODELETE) {
@@ -480,7 +490,7 @@ UA_Server_readWithSession(UA_Server *server, UA_Session *session,
 UA_DataValue
 UA_Server_read(UA_Server *server, const UA_ReadValueId *item,
                UA_TimestampsToReturn timestamps) {
-    return UA_Server_readWithSession(server, &adminSession, item, timestamps);
+    return UA_Server_readWithSession(server, &server->adminSession, item, timestamps);
 }
 
 /* Used in inline functions exposing the Read service with more syntactic sugar
@@ -743,11 +753,12 @@ compatibleValueArrayDimensions(const UA_Variant *value, size_t targetArrayDimens
     size_t valueArrayDimensionsSize = value->arrayDimensionsSize;
     UA_UInt32 *valueArrayDimensions = value->arrayDimensions;
     UA_UInt32 tempArrayDimensions;
-    if(valueArrayDimensions == 0 && !UA_Variant_isScalar(value)) {
+    if(!valueArrayDimensions && !UA_Variant_isScalar(value)) {
         valueArrayDimensionsSize = 1;
         tempArrayDimensions = (UA_UInt32)value->arrayLength;
         valueArrayDimensions = &tempArrayDimensions;
     }
+    UA_assert(valueArrayDimensionsSize == 0 || valueArrayDimensions != NULL);
     return compatibleArrayDimensions(targetArrayDimensionsSize, targetArrayDimensions,
                                      valueArrayDimensionsSize, valueArrayDimensions);
 }
@@ -764,22 +775,19 @@ compatibleValue(UA_Server *server, UA_Session *session, const UA_NodeId *targetD
            UA_NodeId_equal(targetDataTypeId, &UA_NODEID_NULL))
             return true;
 
-        /* Workaround: Allow empty value if the target data type is abstract */
-        const UA_Node *datatype = UA_Nodestore_get(server, targetDataTypeId);
-        if(datatype && datatype->nodeClass == UA_NODECLASS_DATATYPE) {
-            UA_Boolean isAbstract = ((const UA_DataTypeNode*)datatype)->isAbstract;
-            UA_Nodestore_release(server, datatype);
-            if(isAbstract)
-                return true;
+        /* Allow empty node values since existing information models may have
+         * variables with no value, e.g. OldValues - ns=0;i=3024. See also
+         * #1889, https://github.com/open62541/open62541/pull/1889#issuecomment-403506538 */
+        if(server->config.relaxEmptyValueConstraint) {
+            UA_LOG_DEBUG_SESSION(server->config.logger, session,
+                                 "Only Variables with data type BaseDataType can contain an "
+                                 "empty value. Allow via explicit constraint relaxation.");
+            return true;
         }
 
-        UA_LOG_INFO(server->config.logger, UA_LOGCATEGORY_SERVER,
-                    "Only Variables with data type BaseDataType should contain "
-                    "a null (empty) value");
-        /* we allow addition of the node anyways since existing information models may have
-           variables with no value, e.g. OldValues - ns=0;i=3024.
-           See also #1889, https://github.com/open62541/open62541/pull/1889#issuecomment-403506538 */
-        return true;
+        UA_LOG_INFO_SESSION(server->config.logger, session,
+                            "Only Variables with data type BaseDataType can contain an empty value");
+        return false;
     }
 
     /* Has the value a subtype of the required type? BaseDataType (Variant) can
@@ -1100,6 +1108,15 @@ writeValueAttribute(UA_Server *server, UA_Session *session,
         else
             retval = writeValueAttributeWithRange(node, &adjustedValue, rangeptr);
 
+#ifdef UA_ENABLE_HISTORIZING
+        /* node is a UA_VariableNode*, but it may also point to a UA_VariableTypeNode */
+        /* UA_VariableTypeNode doesn't have the historizing attribute */
+        if(retval == UA_STATUSCODE_GOOD && node->nodeClass == UA_NODECLASS_VARIABLE &&
+                server->config.historyDatabase.setValue)
+            server->config.historyDatabase.setValue(server, server->config.historyDatabase.context,
+                                                    &session->sessionId, session->sessionHandle,
+                                                    &node->nodeId, node->historizing, &adjustedValue);
+#endif
         /* Callback after writing */
         if(retval == UA_STATUSCODE_GOOD && node->value.data.callback.onWrite)
             node->value.data.callback.onWrite(server, &session->sessionId,
@@ -1378,7 +1395,7 @@ UA_Server_writeWithSession(UA_Server *server, UA_Session *session,
 
 UA_StatusCode
 UA_Server_write(UA_Server *server, const UA_WriteValue *value) {
-    return UA_Server_editNode(server, &adminSession, &value->nodeId,
+    return UA_Server_editNode(server, &server->adminSession, &value->nodeId,
                               (UA_EditNodeCallback)copyAttributeIntoNode,
                               /* casting away const qualifier because callback uses const anyway */
                               (UA_WriteValue *)(uintptr_t)value);
@@ -1404,6 +1421,54 @@ __UA_Server_write(UA_Server *server, const UA_NodeId *nodeId,
     }
     return UA_Server_write(server, &wvalue);
 }
+
+#ifdef UA_ENABLE_HISTORIZING
+void
+Service_HistoryRead(UA_Server *server,
+                    UA_Session *session,
+                    const UA_HistoryReadRequest *request,
+                    UA_HistoryReadResponse *response) {
+    if (request->historyReadDetails.encoding != UA_EXTENSIONOBJECT_DECODED) {
+        response->responseHeader.serviceResult = UA_STATUSCODE_BADNOTSUPPORTED;
+        return;
+    }
+    if (request->historyReadDetails.content.decoded.type == &UA_TYPES[UA_TYPES_READRAWMODIFIEDDETAILS]) {
+        UA_ReadRawModifiedDetails * details = (UA_ReadRawModifiedDetails*)request->historyReadDetails.content.decoded.data;
+        if (details->isReadModified) {
+            // TODO add server->config.historyReadService.read_modified
+            response->responseHeader.serviceResult = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+            return;
+        } else {
+            if (server->config.historyDatabase.readRaw) {
+                response->resultsSize = request->nodesToReadSize;
+
+                response->results = (UA_HistoryReadResult*)UA_Array_new(response->resultsSize, &UA_TYPES[UA_TYPES_HISTORYREADRESULT]);
+                UA_HistoryData ** historyData = (UA_HistoryData **)UA_calloc(response->resultsSize, sizeof(UA_HistoryData*));
+                for (size_t i = 0; i < response->resultsSize; ++i) {
+                    UA_HistoryData * data = UA_HistoryData_new();
+                    response->results[i].historyData.encoding = UA_EXTENSIONOBJECT_DECODED;
+                    response->results[i].historyData.content.decoded.type = &UA_TYPES[UA_TYPES_HISTORYDATA];
+                    response->results[i].historyData.content.decoded.data = data;
+                    historyData[i] = data;
+                }
+                server->config.historyDatabase.readRaw(server, server->config.historyDatabase.context,
+                                                       &session->sessionId, session->sessionHandle,
+                                                       &request->requestHeader, details,
+                                                       request->timestampsToReturn, request->releaseContinuationPoints,
+                                                       request->nodesToReadSize, request->nodesToRead,
+                                                       response, historyData);
+                UA_free(historyData);
+                return;
+            }
+            response->responseHeader.serviceResult = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+            return;
+        }
+    }
+    // TODO handle more request->historyReadDetails.content.decoded.type types
+    response->responseHeader.serviceResult = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+    return;
+}
+#endif
 
 UA_StatusCode UA_EXPORT
 UA_Server_writeObjectProperty(UA_Server *server, const UA_NodeId objectId,

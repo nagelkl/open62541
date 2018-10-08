@@ -10,6 +10,32 @@
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
 
+UA_StatusCode
+UA_MonitoredItem_removeNodeEventCallback(UA_Server *server, UA_Session *session,
+                                         UA_Node *node, void *data) {
+    /* data is the monitoredItemID */
+    /* catch edge case that it's the first element */
+    if (data == ((UA_ObjectNode *) node)->monitoredItemQueue) {
+        ((UA_ObjectNode *)node)->monitoredItemQueue = ((UA_MonitoredItem *)data)->next;
+        return UA_STATUSCODE_GOOD;
+    }
+
+    /* SLIST_FOREACH */
+    for (UA_MonitoredItem *entry = ((UA_ObjectNode *) node)->monitoredItemQueue->next;
+         entry != NULL; entry=entry->next) {
+        if (entry == (UA_MonitoredItem *)data) {
+            /* SLIST_REMOVE */
+            UA_MonitoredItem *iter = ((UA_ObjectNode *) node)->monitoredItemQueue;
+            for (; iter->next != entry; iter=iter->next) {}
+            iter->next = entry->next;
+            /* Unlike SLIST_REMOVE, do not free the entry, since it
+             * is still being worked on in the calling function */
+            break;
+        }
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
 typedef struct Events_nodeListElement {
     LIST_ENTRY(Events_nodeListElement) listEntry;
     UA_NodeId nodeId;
@@ -115,13 +141,47 @@ isValidEvent(UA_Server *server, const UA_NodeId *validEventParent, const UA_Node
     UA_BrowsePathResult bpr = UA_Server_browseSimplifiedBrowsePath(server, *eventId, 1, &findName);
     if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
         UA_BrowsePathResult_deleteMembers(&bpr);
-        return UA_FALSE;
+        return false;
     }
+    
+	/* Get the EventType Property Node */
+    UA_Variant tOutVariant;
+    UA_Variant_init(&tOutVariant);
+
+    /* Read the Value of EventType Property Node (the Value should be a NodeId) */
+    UA_StatusCode retval = UA_Server_readValue(server, bpr.targets[0].targetId.nodeId, &tOutVariant);
+    if(retval != UA_STATUSCODE_GOOD ||
+       !UA_Variant_hasScalarType(&tOutVariant, &UA_TYPES[UA_TYPES_NODEID])) {
+        UA_BrowsePathResult_deleteMembers(&bpr);
+        return false;
+    }
+
+    const UA_NodeId *tEventType = (UA_NodeId*)tOutVariant.data;
+
+    /* Make sure the EventType is not a Subtype of CondtionType
+     * First check for filter set using UaExpert
+     * (ConditionId Clause won't be present in Events, which are not Conditions)
+     * Second check for Events which are Conditions or Alarms (Part 9 not supported yet) */
+    UA_NodeId conditionTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE);
     UA_NodeId hasSubtypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_HASSUBTYPE);
-    UA_Boolean tmp = isNodeInTree(&server->config.nodestore, &bpr.targets[0].targetId.nodeId,
-                                  validEventParent, &hasSubtypeId, 1);
+    if(UA_NodeId_equal(validEventParent, &conditionTypeId) ||
+       isNodeInTree(&server->config.nodestore, tEventType,
+    		         &conditionTypeId, &hasSubtypeId, 1)){
+        UA_LOG_ERROR(server->config.logger, UA_LOGCATEGORY_USERLAND,
+                     "Alarms and Conditions are not supported yet!");
+        UA_BrowsePathResult_deleteMembers(&bpr);
+        UA_Variant_deleteMembers(&tOutVariant);
+        return false;
+    }
+
+    /* check whether Valid Event other than Conditions */
+    UA_NodeId baseEventTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_BASEEVENTTYPE);
+    UA_Boolean isSubtypeOfBaseEvent = isNodeInTree(&server->config.nodestore, tEventType,
+                                                   &baseEventTypeId, &hasSubtypeId, 1);
+
     UA_BrowsePathResult_deleteMembers(&bpr);
-    return tmp;
+    UA_Variant_deleteMembers(&tOutVariant);
+    return isSubtypeOfBaseEvent;
 }
 
 /* static UA_StatusCode */
@@ -222,7 +282,7 @@ UA_Server_filterEvent(UA_Server *server, UA_Session *session,
     /* iterate over the selectClauses */
     for(size_t i = 0; i < filter->selectClausesSize; i++) {
         if(!UA_NodeId_equal(&filter->selectClauses[i].typeDefinitionId, &baseEventTypeId) &&
-           !isValidEvent(server, &filter->selectClauses[0].typeDefinitionId, eventNode)) {
+           !isValidEvent(server, &filter->selectClauses[i].typeDefinitionId, eventNode)) {
             UA_Variant_init(&notification->fields.eventFields[i]);
             /* EventFilterResult currently isn't being used
             notification->result.selectClauseResults[i] = UA_STATUSCODE_BADTYPEDEFINITIONINVALID; */

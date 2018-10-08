@@ -1,8 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- *    Copyright 2014-2017 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
+ *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2014, 2017 (c) Florian Palm
  *    Copyright 2015-2016 (c) Sten Grüner
  *    Copyright 2015 (c) Chris Iatrou
@@ -14,10 +14,6 @@
 #ifndef UA_SERVER_INTERNAL_H_
 #define UA_SERVER_INTERNAL_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_util_internal.h"
 #include "ua_server.h"
 #include "ua_server_config.h"
@@ -25,6 +21,9 @@ extern "C" {
 #include "ua_connection_internal.h"
 #include "ua_session_manager.h"
 #include "ua_securechannel_manager.h"
+#include "ua_workqueue.h"
+
+_UA_BEGIN_DECLS
 
 #ifdef UA_ENABLE_PUBSUB
 #include "ua_pubsub_manager.h"
@@ -44,30 +43,21 @@ typedef struct {
 
 #endif
 
-#ifdef UA_ENABLE_MULTITHREADING
-
-#include <pthread.h>
-
-struct UA_Worker;
-typedef struct UA_Worker UA_Worker;
-
-struct UA_WorkerCallback;
-typedef struct UA_WorkerCallback UA_WorkerCallback;
-
-SIMPLEQ_HEAD(UA_DispatchQueue, UA_WorkerCallback);
-typedef struct UA_DispatchQueue UA_DispatchQueue;
-
-#endif /* UA_ENABLE_MULTITHREADING */
-
 #ifdef UA_ENABLE_DISCOVERY
 
 typedef struct registeredServer_list_entry {
+#ifdef UA_ENABLE_MULTITHREADING
+    UA_DelayedCallback delayedCleanup;
+#endif
     LIST_ENTRY(registeredServer_list_entry) pointers;
     UA_RegisteredServer registeredServer;
     UA_DateTime lastSeen;
 } registeredServer_list_entry;
 
 typedef struct periodicServerRegisterCallback_entry {
+#ifdef UA_ENABLE_MULTITHREADING
+    UA_DelayedCallback delayedCleanup;
+#endif
     LIST_ENTRY(periodicServerRegisterCallback_entry) pointers;
     struct PeriodicServerRegisterCallback *callback;
 } periodicServerRegisterCallback_entry;
@@ -77,6 +67,9 @@ typedef struct periodicServerRegisterCallback_entry {
 #include "mdnsd/libmdnsd/mdnsd.h"
 
 typedef struct serverOnNetwork_list_entry {
+#ifdef UA_ENABLE_MULTITHREADING
+    UA_DelayedCallback delayedCleanup;
+#endif
     LIST_ENTRY(serverOnNetwork_list_entry) pointers;
     UA_ServerOnNetwork serverOnNetwork;
     UA_DateTime created;
@@ -114,6 +107,9 @@ struct UA_Server {
     /* Security */
     UA_SecureChannelManager secureChannelManager;
     UA_SessionManager sessionManager;
+    UA_Session adminSession; /* Local access to the services (for startup and
+                              * maintenance) uses this Session with all possible
+                              * access rights (Session Id: 1) */
 
 #ifdef UA_ENABLE_DISCOVERY
     /* Discovery */
@@ -156,17 +152,7 @@ struct UA_Server {
     /* Callbacks with a repetition interval */
     UA_Timer timer;
 
-    /* Delayed callbacks */
-    SLIST_HEAD(DelayedCallbacksList, UA_DelayedCallback) delayedCallbacks;
-
-    /* Worker threads */
-#ifdef UA_ENABLE_MULTITHREADING
-    UA_Worker *workers; /* there are nThread workers in a running server */
-    UA_DispatchQueue dispatchQueue; /* Dispatch queue for the worker threads */
-    pthread_mutex_t dispatchQueue_accessMutex; /* mutex for access to queue */
-    pthread_cond_t dispatchQueue_condition; /* so the workers don't spin if the queue is empty */
-    pthread_mutex_t dispatchQueue_conditionMutex; /* mutex for access to condition variable */
-#endif
+    UA_WorkQueue workQueue;
 
     /* For bootstrapping, omit some consistency checks, creating a reference to
      * the parent and member instantiation */
@@ -212,6 +198,12 @@ struct UA_Server {
 #define UA_Nodestore_remove(SERVER, NODEID)                             \
     (SERVER)->config.nodestore.removeNode((SERVER)->config.nodestore.context, NODEID)
 
+/* Deletes references from the node which are not matching any type in the given
+ * array. Could be used to e.g. delete all the references, except
+ * 'HASMODELINGRULE' */
+void UA_Node_deleteReferencesSubset(UA_Node *node, size_t referencesSkipSize,
+                                    UA_NodeId* referencesSkip);
+
 /* Calls the callback with the node retrieved from the nodestore on top of the
  * stack. Either a copy or the original node for in-situ editing. Depends on
  * multithreading and the nodestore.*/
@@ -221,31 +213,6 @@ UA_StatusCode UA_Server_editNode(UA_Server *server, UA_Session *session,
                                  const UA_NodeId *nodeId,
                                  UA_EditNodeCallback callback,
                                  void *data);
-
-/*************/
-/* Callbacks */
-/*************/
-
-/* Delayed callbacks are executed when all previously dispatched callbacks are
- * finished */
-UA_StatusCode
-UA_Server_delayedCallback(UA_Server *server, UA_ServerCallback callback, void *data);
-
-UA_StatusCode
-UA_Server_delayedFree(UA_Server *server, void *data);
-
-#ifndef UA_ENABLE_MULTITHREADING
-/* Execute all delayed callbacks regardless of whether the worker threads have
- * finished previous work */
-void UA_Server_cleanupDelayedCallbacks(UA_Server *server);
-#else
-void UA_Server_cleanupDispatchQueue(UA_Server *server);
-#endif
-
-/* Callback is executed in the same thread or, if possible, dispatched to one of
- * the worker threads. */
-void
-UA_Server_workerCallback(UA_Server *server, UA_ServerCallback callback, void *data);
 
 /*********************/
 /* Utility Functions */
@@ -317,6 +284,14 @@ UA_Server_processServiceOperations(UA_Server *server, UA_Session *session,
 /***************************************/
 /* Check Information Model Consistency */
 /***************************************/
+
+/* Read a node attribute in the context of a "checked-out" node. So the
+ * attribute will not be copied when possible. The variant then points into the
+ * node and has UA_VARIANT_DATA_NODELETE set. */
+void
+ReadWithNode(const UA_Node *node, UA_Server *server, UA_Session *session,
+             UA_TimestampsToReturn timestampsToReturn,
+             const UA_ReadValueId *id, UA_DataValue *v);
 
 UA_StatusCode
 readValueAttribute(UA_Server *server, UA_Session *session,
@@ -431,8 +406,6 @@ AddNode_finish(UA_Server *server, UA_Session *session, const UA_NodeId *nodeId);
 
 UA_StatusCode UA_Server_initNS0(UA_Server *server);
 
-#ifdef __cplusplus
-} // extern "C"
-#endif
+_UA_END_DECLS
 
 #endif /* UA_SERVER_INTERNAL_H_ */

@@ -18,13 +18,7 @@
 #include "ua_accesscontrol_default.h"
 #include "ua_pki_certificate.h"
 #include "ua_nodestore_default.h"
-#include "ua_securitypolicy_none.h"
-
-#ifdef UA_ENABLE_ENCRYPTION
-#include "ua_securitypolicy_basic128rsa15.h"
-#include "ua_securitypolicy_basic256sha256.h"
-#endif
-
+#include "ua_securitypolicies.h"
 
 /* Struct initialization works across ANSI C/C99/C++ if it is done when the
  * variable is first declared. Assigning values to existing structs is
@@ -254,6 +248,9 @@ createDefaultConfig(void) {
 
     /* Access Control. Anonymous Login only. */
     conf->accessControl = UA_AccessControl_default(true, usernamePasswordsSize, usernamePasswords);
+
+    /* Relax constraints for the InformationModel */
+    conf->relaxEmptyValueConstraint = true; /* Allow empty values */
 
     /* Limits for SecureChannels */
     conf->maxSecureChannels = 40;
@@ -623,11 +620,13 @@ UA_ServerConfig_delete(UA_ServerConfig *config) {
         config->nodestore.deleteNodestore(config->nodestore.context);
 
     /* Custom DataTypes */
-    for(size_t i = 0; i < config->customDataTypesSize; ++i)
-        UA_free(config->customDataTypes[i].members);
-    UA_free(config->customDataTypes);
-    config->customDataTypes = NULL;
-    config->customDataTypesSize = 0;
+    if(config->customDataTypesSize > 0) {
+        for(size_t i = 0; i < config->customDataTypesSize; ++i)
+            UA_free(config->customDataTypes[i].members);
+        UA_free(config->customDataTypes);
+        config->customDataTypes = NULL;
+        config->customDataTypesSize = 0;
+    }
 
     /* Networking */
     for(size_t i = 0; i < config->networkLayersSize; ++i)
@@ -653,8 +652,45 @@ UA_ServerConfig_delete(UA_ServerConfig *config) {
     /* Access Control */
     config->accessControl.deleteMembers(&config->accessControl);
 
+    /* Historical data */
+#ifdef UA_ENABLE_HISTORIZING
+    if (config->historyDatabase.deleteMembers)
+        config->historyDatabase.deleteMembers(&config->historyDatabase);
+#endif
+
     UA_free(config);
 }
+
+
+#ifdef UA_ENABLE_PUBSUB /* conditional compilation */
+/**
+ * Add a pubsubTransportLayer to the configuration.
+ * Memory is reallocated on demand */
+UA_StatusCode
+UA_ServerConfig_addPubSubTransportLayer(UA_ServerConfig *config,
+        UA_PubSubTransportLayer *pubsubTransportLayer) {
+
+    if(config->pubsubTransportLayersSize == 0) {
+        config->pubsubTransportLayers = (UA_PubSubTransportLayer *)
+                UA_malloc(sizeof(UA_PubSubTransportLayer));
+    } else {
+        config->pubsubTransportLayers = (UA_PubSubTransportLayer*)
+                UA_realloc(config->pubsubTransportLayers,
+                sizeof(UA_PubSubTransportLayer) * (config->pubsubTransportLayersSize + 1));
+    }
+
+    if (config->pubsubTransportLayers == NULL) {
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    }
+
+    memcpy(&config->pubsubTransportLayers[config->pubsubTransportLayersSize],
+            pubsubTransportLayer, sizeof(UA_PubSubTransportLayer));
+    config->pubsubTransportLayersSize++;
+
+    return UA_STATUSCODE_GOOD;
+}
+#endif /* UA_ENABLE_PUBSUB */
+
 
 /***************************/
 /* Default Client Settings */
@@ -679,17 +715,17 @@ const UA_ClientConfig UA_ClientConfig_default = {
     UA_ClientConnectionTCP, /* .connectionFunc (for sync connection) */
     UA_ClientConnectionTCP_init, /* .initConnectionFunc (for async client) */
     UA_ClientConnectionTCP_poll_callback, /* .pollConnectionFunc (for async connection) */
-    0, /* .customDataTypesSize */
+    0,    /* .customDataTypesSize */
     NULL, /* .customDataTypes */
 
     NULL, /* .stateCallback */
-#ifdef UA_ENABLE_SUBSCRIPTIONS
-    NULL, /* .subscriptionInactivityCallback */
-#endif
+    0,    /* .connectivityCheckInterval */
+
     NULL, /* .inactivityCallback */
     NULL, /* .clientContext */
+
 #ifdef UA_ENABLE_SUBSCRIPTIONS
-    10, /* .outStandingPublishRequests */
+    10,  /* .outStandingPublishRequests */
+    NULL /* .subscriptionInactivityCallback */
 #endif
-    0 /* .connectivityCheckInterval */
 };

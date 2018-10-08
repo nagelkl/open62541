@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2014-2017 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2014-2016 (c) Sten Grüner
@@ -23,11 +23,14 @@ static UA_StatusCode
 setApplicationDescriptionFromRegisteredServer(const UA_FindServersRequest *request,
                                               UA_ApplicationDescription *target,
                                               const UA_RegisteredServer *registeredServer) {
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
-
     UA_ApplicationDescription_init(target);
-    retval |= UA_String_copy(&registeredServer->serverUri, &target->applicationUri);
-    retval |= UA_String_copy(&registeredServer->productUri, &target->productUri);
+    UA_StatusCode retval = UA_String_copy(&registeredServer->serverUri, &target->applicationUri);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
+
+    retval = UA_String_copy(&registeredServer->productUri, &target->productUri);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
 
     // if the client requests a specific locale, select the corresponding server name
     if(request->localeIdsSize) {
@@ -35,8 +38,10 @@ setApplicationDescriptionFromRegisteredServer(const UA_FindServersRequest *reque
         for(size_t i =0; i<request->localeIdsSize && !appNameFound; i++) {
             for(size_t j =0; j<registeredServer->serverNamesSize; j++) {
                 if(UA_String_equal(&request->localeIds[i], &registeredServer->serverNames[j].locale)) {
-                    retval |= UA_LocalizedText_copy(&registeredServer->serverNames[j],
-                                                    &target->applicationName);
+                    retval = UA_LocalizedText_copy(&registeredServer->serverNames[j],
+                                                   &target->applicationName);
+                    if(retval != UA_STATUSCODE_GOOD)
+                        return retval;
                     appNameFound = UA_TRUE;
                     break;
                 }
@@ -45,16 +50,23 @@ setApplicationDescriptionFromRegisteredServer(const UA_FindServersRequest *reque
 
         // server does not have the requested local, therefore we can select the
         // most suitable one
-        if(!appNameFound && registeredServer->serverNamesSize)
-            retval |= UA_LocalizedText_copy(&registeredServer->serverNames[0],
-                                            &target->applicationName);
+        if(!appNameFound && registeredServer->serverNamesSize) {
+            retval = UA_LocalizedText_copy(&registeredServer->serverNames[0],
+                                           &target->applicationName);
+            if(retval != UA_STATUSCODE_GOOD)
+                return retval;
+        }
     } else if(registeredServer->serverNamesSize) {
         // just take the first name
-        retval |= UA_LocalizedText_copy(&registeredServer->serverNames[0], &target->applicationName);
+        retval = UA_LocalizedText_copy(&registeredServer->serverNames[0], &target->applicationName);
+        if(retval != UA_STATUSCODE_GOOD)
+            return retval;
     }
 
     target->applicationType = registeredServer->serverType;
-    retval |= UA_String_copy(&registeredServer->gatewayServerUri, &target->gatewayServerUri);
+    retval = UA_String_copy(&registeredServer->gatewayServerUri, &target->gatewayServerUri);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
     // TODO where do we get the discoveryProfileUri for application data?
 
     target->discoveryUrlsSize = registeredServer->discoveryUrlsSize;
@@ -63,8 +75,11 @@ setApplicationDescriptionFromRegisteredServer(const UA_FindServersRequest *reque
         target->discoveryUrls = (UA_String *)UA_malloc(duSize);
         if(!target->discoveryUrls)
             return UA_STATUSCODE_BADOUTOFMEMORY;
-        for(size_t i = 0; i<registeredServer->discoveryUrlsSize; i++)
-            retval |= UA_String_copy(&registeredServer->discoveryUrls[i], &target->discoveryUrls[i]);
+        for(size_t i = 0; i < registeredServer->discoveryUrlsSize; i++) {
+            retval = UA_String_copy(&registeredServer->discoveryUrls[i], &target->discoveryUrls[i]);
+            if(retval != UA_STATUSCODE_GOOD)
+                return retval;
+        }
     }
 
     return retval;
@@ -195,9 +210,10 @@ void Service_FindServers(UA_Server *server, UA_Session *session,
 #endif
 }
 
-void Service_GetEndpoints(UA_Server *server, UA_Session *session,
-                          const UA_GetEndpointsRequest *request,
-                          UA_GetEndpointsResponse *response) {
+void
+Service_GetEndpoints(UA_Server *server, UA_Session *session,
+                     const UA_GetEndpointsRequest *request,
+                     UA_GetEndpointsResponse *response) {
     /* If the client expects to see a specific endpointurl, mirror it back. If
        not, clone the endpoints with the discovery url of all networklayers. */
     const UA_String *endpointUrl = &request->endpointUrl;
@@ -255,38 +271,34 @@ void Service_GetEndpoints(UA_Server *server, UA_Session *session,
     response->endpointsSize = relevant_count * clone_times;
 
     size_t k = 0;
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    UA_StatusCode retval;
     for(size_t i = 0; i < clone_times; ++i) {
         if(nl_endpointurl)
             endpointUrl = &server->config.networkLayers[i].discoveryUrl;
         for(size_t j = 0; j < server->config.endpointsSize; ++j) {
             if(!relevant_endpoints[j])
                 continue;
-            retval |= UA_EndpointDescription_copy(&server->config.endpoints[j].endpointDescription,
-                                                  &response->endpoints[k]);
-            retval |= UA_String_copy(endpointUrl, &response->endpoints[k].endpointUrl);
+            retval = UA_EndpointDescription_copy(&server->config.endpoints[j].endpointDescription,
+                                                 &response->endpoints[k]);
+            if(retval != UA_STATUSCODE_GOOD)
+                goto error;
+            retval = UA_String_copy(endpointUrl, &response->endpoints[k].endpointUrl);
+            if(retval != UA_STATUSCODE_GOOD)
+                goto error;
             ++k;
         }
     }
 
-    if(retval != UA_STATUSCODE_GOOD) {
-        response->responseHeader.serviceResult = retval;
-        UA_Array_delete(response->endpoints, response->endpointsSize,
-                        &UA_TYPES[UA_TYPES_ENDPOINTDESCRIPTION]);
-        response->endpoints = NULL;
-        response->endpointsSize = 0;
-        return;
-    }
+    return;
+error:
+    response->responseHeader.serviceResult = retval;
+    UA_Array_delete(response->endpoints, response->endpointsSize,
+                    &UA_TYPES[UA_TYPES_ENDPOINTDESCRIPTION]);
+    response->endpoints = NULL;
+    response->endpointsSize = 0;
 }
 
 #ifdef UA_ENABLE_DISCOVERY
-
-#ifdef UA_ENABLE_MULTITHREADING
-static void
-freeEntry(UA_Server *server, void *entry) {
-    UA_free(entry);
-}
-#endif
 
 static void
 process_RegisterServer(UA_Server *server, UA_Session *session,
@@ -361,7 +373,7 @@ process_RegisterServer(UA_Server *server, UA_Session *session,
         }
         memcpy(filePath, requestServer->semaphoreFilePath.data, requestServer->semaphoreFilePath.length );
         filePath[requestServer->semaphoreFilePath.length] = '\0';
-        if(UA_access( filePath, 0 ) == -1) {
+        if(!UA_fileExists( filePath )) {
             responseHeader->serviceResult = UA_STATUSCODE_BADSEMPAHOREFILEMISSING;
             UA_free(filePath);
             return;
@@ -409,7 +421,8 @@ process_RegisterServer(UA_Server *server, UA_Session *session,
         server->registeredServersSize--;
 #else
         UA_atomic_subSize(&server->registeredServersSize, 1);
-        UA_Server_delayedCallback(server, freeEntry, registeredServer_entry);
+        registeredServer_entry->delayedCleanup.callback = NULL; /* only free the structure */
+        UA_WorkQueue_enqueueDelayed(&server->workQueue, &registeredServer_entry->delayedCleanup);
 #endif
         responseHeader->serviceResult = UA_STATUSCODE_GOOD;
         return;
@@ -492,14 +505,7 @@ void UA_Discovery_cleanupTimedOut(UA_Server *server, UA_DateTime nowMonotonic) {
                 memcpy(filePath, current->registeredServer.semaphoreFilePath.data,
                        current->registeredServer.semaphoreFilePath.length );
                 filePath[current->registeredServer.semaphoreFilePath.length] = '\0';
-#ifdef UNDER_CE
-                FILE *fp = fopen(filePath,"rb");
-                semaphoreDeleted = (fp==NULL);
-                if(fp)
-                    fclose(fp);
-#else
-                semaphoreDeleted = UA_access( filePath, 0 ) == -1;
-#endif
+                semaphoreDeleted = UA_fileExists(filePath) == UA_FALSE;
                 UA_free(filePath);
             } else {
                 UA_LOG_ERROR(server->config.logger, UA_LOGCATEGORY_SERVER, "Cannot check registration semaphore. Out of memory");
@@ -531,7 +537,8 @@ void UA_Discovery_cleanupTimedOut(UA_Server *server, UA_DateTime nowMonotonic) {
             server->registeredServersSize--;
 #else
             UA_atomic_subSize(&server->registeredServersSize, 1);
-            UA_Server_delayedCallback(server, freeEntry, current);
+            current->delayedCleanup.callback = NULL; /* Only free the structure */
+            UA_WorkQueue_enqueueDelayed(&server->workQueue, &current->delayedCleanup);
 #endif
         }
     }

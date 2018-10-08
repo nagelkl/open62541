@@ -12,11 +12,9 @@
 #ifndef UA_TYPES_ENCODING_BINARY_H_
 #define UA_TYPES_ENCODING_BINARY_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_types.h"
+
+_UA_BEGIN_DECLS
 
 typedef UA_StatusCode (*UA_exchangeEncodeBuffer)(void *handle, UA_Byte **bufPos,
                                                  const UA_Byte **bufEnd);
@@ -39,7 +37,8 @@ typedef UA_StatusCode (*UA_exchangeEncodeBuffer)(void *handle, UA_Byte **bufPos,
           Is ignored if NULL.
  * @param exchangeHandle Custom data passed into the exchangeCallback.
  * @return Returns a statuscode whether encoding succeeded. */
-UA_StatusCode
+//TODO remove UA_EXPORT after we fix issue #1914
+UA_StatusCode UA_EXPORT
 UA_encodeBinary(const void *src, const UA_DataType *type,
                 UA_Byte **bufPos, const UA_Byte **bufEnd,
                 UA_exchangeEncodeBuffer exchangeCallback,
@@ -76,8 +75,6 @@ UA_calcSizeBinary(const void *p, const UA_DataType *type);
 const UA_DataType *
 UA_findDataTypeByBinary(const UA_NodeId *typeId);
 
-#ifdef __cplusplus
-}
-#endif
+_UA_END_DECLS
 
 #endif /* UA_TYPES_ENCODING_BINARY_H_ */

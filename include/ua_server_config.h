@@ -11,10 +11,6 @@
 #ifndef UA_SERVER_CONFIG_H_
 #define UA_SERVER_CONFIG_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_server.h"
 #include "ua_plugin_log.h"
 #include "ua_plugin_network.h"
@@ -26,6 +22,12 @@ extern "C" {
 #ifdef UA_ENABLE_PUBSUB
 #include "ua_plugin_pubsub.h"
 #endif
+
+#ifdef UA_ENABLE_HISTORIZING
+#include "ua_plugin_historydatabase.h"
+#endif
+
+_UA_BEGIN_DECLS
 
 /**
  * .. _server-configuration:
@@ -116,6 +118,11 @@ struct UA_ServerConfig {
     /* Certificate Verification */
     UA_CertificateVerification certificateVerification;
 
+    /* Relax constraints for the InformationModel */
+    UA_Boolean relaxEmptyValueConstraint; /* Nominally, only variables with data
+                                           * type BaseDataType can have an empty
+                                           * value. */
+
     /* Limits for SecureChannels */
     UA_UInt16 maxSecureChannels;
     UA_UInt32 maxSecurityTokenLifetime; /* in ms */
@@ -167,8 +174,28 @@ struct UA_ServerConfig {
     UA_UInt32 discoveryCleanupTimeout;
 #endif
 
+#ifdef UA_ENABLE_SUBSCRIPTIONS
+    /* Register MonitoredItem in Userland
+     *
+     * @param server Allows the access to the server object
+     * @param sessionId The session id, represented as an node id
+     * @param sessionContext An optional pointer to user-defined data for the specific data source
+     * @param nodeid Id of the node in question
+     * @param nodeidContext An optional pointer to user-defined data, associated
+     *        with the node in the nodestore. Note that, if the node has already been removed,
+     *        this value contains a NULL pointer.
+     * @param attributeId Identifies which attribute (value, data type etc.) is monitored
+     * @param removed Determines if the MonitoredItem was removed or created. */
+    void (*monitoredItemRegisterCallback)(UA_Server *server,
+                                          const UA_NodeId *sessionId, void *sessionContext,
+                                          const UA_NodeId *nodeId, void *nodeContext,
+                                          UA_UInt32 attibuteId, UA_Boolean removed);
+#endif
+
     /* Historical Access */
 #ifdef UA_ENABLE_HISTORIZING
+    UA_HistoryDatabase historyDatabase;
+    
     UA_Boolean accessHistoryDataCapability;
     UA_UInt32  maxReturnDataValues; /* 0 -> unlimited size */
     
@@ -191,8 +218,6 @@ struct UA_ServerConfig {
 #endif
 };
 
-#ifdef __cplusplus
-}
-#endif
+_UA_END_DECLS
 
 #endif /* UA_SERVER_CONFIG_H_ */

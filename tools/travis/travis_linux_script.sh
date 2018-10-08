@@ -68,6 +68,15 @@ if [ $ANALYZE = "true" ]; then
 
         mkdir -p build
         cd build
+        scan-build-6.0 cmake -DUA_ENABLE_PUBSUB=ON -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON ..
+        scan-build-6.0 -enable-checker security.FloatLoopCounter \
+          -enable-checker security.insecureAPI.UncheckedReturn \
+          --status-bugs -v \
+          make -j
+        cd .. && rm build -rf
+
+        mkdir -p build
+        cd build
         scan-build-6.0 cmake -DUA_ENABLE_AMALGAMATION=ON ..
         scan-build-6.0 -enable-checker security.FloatLoopCounter \
           -enable-checker security.insecureAPI.UncheckedReturn \
@@ -177,8 +186,8 @@ else
     echo -e "\r\n== Building the C++ example =="  && echo -en 'travis_fold:start:script.build.example\\r'
     mkdir -p build && cd build
     cp ../../open62541.* .
-    gcc -std=c99  -DUA_ARCHITECTURE_POSIX  -c open62541.c
-    g++ ../examples/server.cpp -DUA_ARCHITECTURE_POSIX -I./ open62541.o -lrt -o cpp-server
+    gcc -std=c99 -c open62541.c
+    g++ ../examples/server.cpp -I./ open62541.o -lrt -o cpp-server
     if [ $? -ne 0 ] ; then exit 1 ; fi
     cd .. && rm build -rf
     echo -en 'travis_fold:end:script.build.example\\r'
@@ -239,9 +248,9 @@ else
     mkdir -p build && cd build
     # Valgrind cannot handle the full NS0 because the generated file is too big. Thus run NS0 full without valgrind
     cmake -DPYTHON_EXECUTABLE:FILEPATH=/usr/bin/$PYTHON -DUA_NAMESPACE_ZERO=FULL \
-    -DCMAKE_BUILD_TYPE=Debug -DUA_BUILD_EXAMPLES=ON -DUA_ENABLE_PUBSUB=ON -DUA_ENABLE_ENCRYPTION=ON -DUA_ENABLE_DISCOVERY=ON \
+    -DCMAKE_BUILD_TYPE=Debug -DUA_BUILD_EXAMPLES=ON -DUA_ENABLE_PUBSUB=ON -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON -DUA_ENABLE_ENCRYPTION=ON -DUA_ENABLE_DISCOVERY=ON \
     -DUA_ENABLE_DISCOVERY_MULTICAST=ON -DUA_BUILD_UNIT_TESTS=ON -DUA_ENABLE_COVERAGE=OFF \
-    -DUA_ENABLE_UNIT_TESTS_MEMCHECK=OFF -DUA_ENABLE_SUBSCRIPTIONS_EVENTS=ON ..
+    -DUA_ENABLE_UNIT_TESTS_MEMCHECK=OFF -DUA_ENABLE_SUBSCRIPTIONS=ON -DUA_ENABLE_SUBSCRIPTIONS_EVENTS=ON ..
     make -j && make test ARGS="-V"
     if [ $? -ne 0 ] ; then exit 1 ; fi
     cd .. && rm build -rf
@@ -251,16 +260,17 @@ else
         echo -e "\r\n== Unit tests (minimal NS0) ==" && echo -en 'travis_fold:start:script.build.unit_test_ns0_minimal\\r'
         mkdir -p build && cd build
         cmake -DPYTHON_EXECUTABLE:FILEPATH=/usr/bin/$PYTHON \
-        -DCMAKE_BUILD_TYPE=Debug -DUA_BUILD_EXAMPLES=ON -DUA_ENABLE_PUBSUB=ON -DUA_ENABLE_ENCRYPTION=ON -DUA_ENABLE_DISCOVERY=ON \
+        -DCMAKE_BUILD_TYPE=Debug -DUA_BUILD_EXAMPLES=ON -DUA_ENABLE_PUBSUB=ON -DUA_ENABLE_PUBSUB_DELTAFRAMES=ON -DUA_ENABLE_PUBSUB_INFORMATIONMODEL=ON -DUA_ENABLE_ENCRYPTION=ON -DUA_ENABLE_DISCOVERY=ON \
         -DUA_ENABLE_DISCOVERY_MULTICAST=ON -DUA_BUILD_UNIT_TESTS=ON -DUA_ENABLE_COVERAGE=ON \
         -DUA_ENABLE_UNIT_TESTS_MEMCHECK=ON ..
         make -j && make test ARGS="-V"
         if [ $? -ne 0 ] ; then exit 1 ; fi
         echo -en 'travis_fold:end:script.build.unit_test_ns0_minimal\\r'
 
-        # only run coveralls on main repo, otherwise it fails uploading the files
+        # only run coveralls on main repo and when MINGW=true
+        # We only want to build coveralls once, so we just take the travis run where MINGW=true which is only enabled once
         echo -e "\r\n== -> Current repo: ${TRAVIS_REPO_SLUG} =="
-        if [ "$CC" = "gcc" ] && [ "${TRAVIS_REPO_SLUG}" = "open62541/open62541" ]; then
+        if [ $MINGW = "true" ] && [ "${TRAVIS_REPO_SLUG}" = "open62541/open62541" ]; then
             echo -en "\r\n==   Building coveralls for ${TRAVIS_REPO_SLUG} ==" && echo -en 'travis_fold:start:script.build.coveralls\\r'
             coveralls -E '.*/build/CMakeFiles/.*' -E '.*/examples/.*' -E '.*/tests/.*' -E '.*\.h' -E '.*CMakeCXXCompilerId\.cpp' -E '.*CMakeCCompilerId\.c' -r ../ || true # ignore result since coveralls is unreachable from time to time
             echo -en 'travis_fold:end:script.build.coveralls\\r'

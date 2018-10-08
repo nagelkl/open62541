@@ -13,22 +13,20 @@
 #ifndef UA_SERVER_H_
 #define UA_SERVER_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "ua_types.h"
 #include "ua_types_generated.h"
 #include "ua_types_generated_handling.h"
 #include "ua_nodeids.h"
 
+_UA_BEGIN_DECLS
+
+/* Forward declarations */
 struct UA_ServerConfig;
 typedef struct UA_ServerConfig UA_ServerConfig;
 
 struct UA_Server;
 typedef struct UA_Server UA_Server;
 
-struct UA_ClientConfig;
 struct UA_Client;
 
 /**
@@ -291,8 +289,7 @@ UA_Server_readExecutable(UA_Server *server, const UA_NodeId nodeId,
  * - UserWriteMask
  * - UserAccessLevel
  * - UserExecutable
- *
- * Historizing is currently unsupported */
+ */
 
 /* Overwrite an attribute of a node. The specialized functions below provide a
  * more concise syntax.
@@ -405,6 +402,15 @@ UA_Server_writeMinimumSamplingInterval(UA_Server *server, const UA_NodeId nodeId
                              UA_ATTRIBUTEID_MINIMUMSAMPLINGINTERVAL,
                              &UA_TYPES[UA_TYPES_DOUBLE],
                              &miniumSamplingInterval);
+}
+
+static UA_INLINE UA_StatusCode
+UA_Server_writeHistorizing(UA_Server *server, const UA_NodeId nodeId,
+                          const UA_Boolean historizing) {
+    return __UA_Server_write(server, &nodeId,
+                             UA_ATTRIBUTEID_HISTORIZING,
+                             &UA_TYPES[UA_TYPES_BOOLEAN],
+                             &historizing);
 }
 
 static UA_INLINE UA_StatusCode
@@ -1198,8 +1204,10 @@ UA_Server_deleteReference(UA_Server *server, const UA_NodeId sourceNodeId,
  * The method ``UA_Server_createEvent`` creates an event and represents it as node. The node receives a unique `EventId`
  * which is automatically added to the node.
  * The method returns a `NodeId` to the object node which represents the event through ``outNodeId``. The `NodeId` can
- * be used to set the attributes of the event. The generated `NodeId` is always numeric. ``outNodeId`` cannot be 
+ * be used to set the attributes of the event. The generated `NodeId` is always numeric. ``outNodeId`` cannot be
  * ``NULL``.
+ *
+ * Note: In order to see an event in UAExpert, the field `Time` must be given a value!
  *
  * The method ``UA_Server_triggerEvent`` "triggers" an event by adding it to all monitored items of the specified
  * origin node and those of all its parents. Any filters specified by the monitored items are automatically applied.
@@ -1241,6 +1249,14 @@ UA_Server_triggerEvent(UA_Server *server, const UA_NodeId eventNodeId, const UA_
 
 #endif /* UA_ENABLE_SUBSCRIPTIONS_EVENTS */
 
+UA_StatusCode UA_EXPORT
+UA_Server_updateCertificate(UA_Server *server,
+                            const UA_ByteString *oldCertificate,
+                            const UA_ByteString *newCertificate,
+                            const UA_ByteString *newPrivateKey,
+                            UA_Boolean closeSessions,
+                            UA_Boolean closeSecureChannels);
+
 /**
  * Utility Functions
  * ----------------- */
@@ -1255,8 +1271,6 @@ UA_StatusCode UA_EXPORT
 UA_Server_getNamespaceByName(UA_Server *server, const UA_String namespaceUri,
                              size_t* foundIndex);
 
-#ifdef __cplusplus
-}
-#endif
+_UA_END_DECLS
 
 #endif /* UA_SERVER_H_ */

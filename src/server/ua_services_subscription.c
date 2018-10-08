@@ -12,6 +12,7 @@
  *    Copyright 2017 (c) Mattias Bornhager
  *    Copyright 2017 (c) Henrik Norrman
  *    Copyright 2017-2018 (c) Thomas Stalder, Blue Time Concept SA
+ *    Copyright 2018 (c) Fabian Arndt, Root-Core
  */
 
 #include "ua_server_internal.h"
@@ -100,10 +101,9 @@ Service_CreateSubscription(UA_Server *server, UA_Session *session,
     response->revisedLifetimeCount = newSubscription->lifeTimeCount;
     response->revisedMaxKeepAliveCount = newSubscription->maxKeepAliveCount;
 
-    UA_LOG_DEBUG_SESSION(server->config.logger, session,
-                         "CreateSubscriptionRequest: Created Subscription %u "
-                         "with a publishing interval of %f ms", response->subscriptionId,
-                         newSubscription->publishingInterval);
+    UA_LOG_INFO_SESSION(server->config.logger, session, "Subscription %u | "
+                        "Created the Subscription with a publishing interval of %.2f ms",
+                        response->subscriptionId, newSubscription->publishingInterval);
 }
 
 void
@@ -158,11 +158,7 @@ static UA_StatusCode
 setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
                          UA_MonitoringMode monitoringMode,
                          const UA_MonitoringParameters *params,
-                         // This parameter is optional and used only if mon->lastValue is not set yet.
-                         // Then numeric type will be detected from this value. Set null as defaut.
                          const UA_DataType* dataType) {
-
-
     /* Filter */
     if(params->filter.encoding != UA_EXTENSIONOBJECT_DECODED) {
         UA_DataChangeFilter_init(&(mon->filter.dataChangeFilter));
@@ -170,17 +166,19 @@ setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
     } else if(params->filter.content.decoded.type == &UA_TYPES[UA_TYPES_DATACHANGEFILTER]) {
         UA_DataChangeFilter *filter = (UA_DataChangeFilter *)params->filter.content.decoded.data;
         // TODO implement EURange to support UA_DEADBANDTYPE_PERCENT
-        if (filter->deadbandType == UA_DEADBANDTYPE_PERCENT) {
+        switch(filter->deadbandType) {
+        case UA_DEADBANDTYPE_NONE:
+            break;
+        case UA_DEADBANDTYPE_ABSOLUTE:
+            if(!dataType || !isDataTypeNumeric(dataType))
+                return UA_STATUSCODE_BADFILTERNOTALLOWED;
+            break;
+        case UA_DEADBANDTYPE_PERCENT:
+            return UA_STATUSCODE_BADMONITOREDITEMFILTERUNSUPPORTED;
+        default:
             return UA_STATUSCODE_BADMONITOREDITEMFILTERUNSUPPORTED;
         }
-        if (UA_Variant_isEmpty(&mon->lastValue)) {
-            if (!dataType || !isDataTypeNumeric(dataType))
-                return UA_STATUSCODE_BADFILTERNOTALLOWED;
-        } else
-        if (!isDataTypeNumeric(mon->lastValue.type)) {
-            return UA_STATUSCODE_BADFILTERNOTALLOWED;
-        }
-        UA_DataChangeFilter_copy(filter, &(mon->filter.dataChangeFilter));
+        UA_DataChangeFilter_copy(filter, &mon->filter.dataChangeFilter);
 #ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
     } else if (params->filter.content.decoded.type == &UA_TYPES[UA_TYPES_EVENTFILTER]) {
         UA_EventFilter_copy((UA_EventFilter *)params->filter.content.decoded.data,
@@ -190,8 +188,14 @@ setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
         return UA_STATUSCODE_BADMONITOREDITEMFILTERINVALID;
     }
 
+    /* <-- The point of no return --> */
+
+    /* Unregister the callback */
     UA_MonitoredItem_unregisterSampleCallback(server, mon);
-    mon->monitoringMode = monitoringMode;
+
+    /* Remove the old samples */
+    UA_ByteString_deleteMembers(&mon->lastSampledValue);
+    UA_Variant_deleteMembers(&mon->lastValue);
 
     /* ClientHandle */
     mon->clientHandle = params->clientHandle;
@@ -221,6 +225,8 @@ setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
     if(samplingInterval != samplingInterval) /* Check for nan */
         mon->samplingInterval = server->config.samplingIntervalLimits.min;
 
+    UA_assert(mon->monitoredItemType != 0);
+
     /* QueueSize */
     UA_BOUNDEDVALUE_SETWBOUNDS(server->config.queueSizeLimits,
                                params->queueSize, mon->maxQueueSize);
@@ -229,6 +235,7 @@ setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
     mon->discardOldest = params->discardOldest;
 
     /* Register sample callback if reporting is enabled */
+    mon->monitoringMode = monitoringMode;
     if(monitoringMode == UA_MONITORINGMODE_REPORTING)
         UA_MonitoredItem_registerSampleCallback(server, mon);
     return UA_STATUSCODE_GOOD;
@@ -315,7 +322,6 @@ Operation_CreateMonitoredItem(UA_Server *server, UA_Session *session, struct cre
 
     /* Initialize the MonitoredItem */
     UA_MonitoredItem_init(newMon, cmc->sub);
-    newMon->monitoredItemType = UA_MONITOREDITEMTYPE_CHANGENOTIFY;
     newMon->attributeId = request->itemToMonitor.attributeId;
     newMon->timestampsToReturn = cmc->timestampsToReturn;
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
@@ -325,8 +331,10 @@ Operation_CreateMonitoredItem(UA_Server *server, UA_Session *session, struct cre
                                        &request->requestedParameters, v.value.type);
     UA_DataValue_deleteMembers(&v);
     if(retval != UA_STATUSCODE_GOOD) {
-        UA_LOG_INFO_SESSION(server->config.logger, session, "Could not create MonitoredItem "
-                            "with status code %s", UA_StatusCode_name(retval));
+        UA_LOG_INFO_SESSION(server->config.logger, session,
+                            "Subscription %u | Could not create a MonitoredItem "
+                            "with StatusCode %s", cmc->sub ? cmc->sub->subscriptionId : 0,
+                            UA_StatusCode_name(retval));
         result->statusCode = retval;
         UA_MonitoredItem_delete(server, newMon);
         return;
@@ -337,11 +345,11 @@ Operation_CreateMonitoredItem(UA_Server *server, UA_Session *session, struct cre
         newMon->monitoredItemId = ++cmc->sub->lastMonitoredItemId;
         UA_Subscription_addMonitoredItem(cmc->sub, newMon);
 #ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
-        if (newMon->monitoredItemType == UA_MONITOREDITEMTYPE_EVENTNOTIFY) {
-        /* insert the monitored item into the node's queue */
-        UA_Server_editNode(server, NULL, &newMon->monitoredNodeId, UA_Server_addMonitoredItemToNodeEditNodeCallback,
-                           newMon);
-    }
+        if(newMon->monitoredItemType == UA_MONITOREDITEMTYPE_EVENTNOTIFY) {
+            /* Insert the monitored item into the node's queue */
+            UA_Server_editNode(server, NULL, &newMon->monitoredNodeId,
+                               UA_Server_addMonitoredItemToNodeEditNodeCallback, newMon);
+        }
 #endif
     } else {
         //TODO support events for local monitored items
@@ -351,6 +359,23 @@ Operation_CreateMonitoredItem(UA_Server *server, UA_Session *session, struct cre
         newMon->monitoredItemId = ++server->lastLocalMonitoredItemId;
         LIST_INSERT_HEAD(&server->localMonitoredItems, newMon, listEntry);
     }
+
+    /* Register MonitoredItem in userland */
+    if(server->config.monitoredItemRegisterCallback) {
+        void *targetContext = NULL;
+        UA_Server_getNodeContext(server, request->itemToMonitor.nodeId, &targetContext);
+        server->config.monitoredItemRegisterCallback(server, &session->sessionId,
+                                                     session->sessionHandle,
+                                                     &request->itemToMonitor.nodeId,
+                                                     targetContext, newMon->attributeId, false);
+        newMon->registered = true;
+    }
+
+    UA_LOG_INFO_SESSION(server->config.logger, session,
+                        "Subscription %u | MonitoredItem %i | "
+                        "Created the MonitoredItem",
+                        cmc->sub ? cmc->sub->subscriptionId : 0,
+                        newMon->monitoredItemId);
 
     /* Create the first sample */
     if(request->monitoringMode == UA_MONITORINGMODE_REPORTING)
@@ -412,7 +437,7 @@ UA_Server_createDataChangeMonitoredItem(UA_Server *server,
 
     UA_MonitoredItemCreateResult result;
     UA_MonitoredItemCreateResult_init(&result);
-    Operation_CreateMonitoredItem(server, &adminSession, &cmc, &item, &result);
+    Operation_CreateMonitoredItem(server, &server->adminSession, &cmc, &item, &result);
     return result;
 }
 
@@ -426,8 +451,19 @@ Operation_ModifyMonitoredItem(UA_Server *server, UA_Session *session, UA_Subscri
         result->statusCode = UA_STATUSCODE_BADMONITOREDITEMIDINVALID;
         return;
     }
-    UA_StatusCode retval;
-    retval = setMonitoredItemSettings(server, mon, mon->monitoringMode, &request->requestedParameters, NULL);
+
+    /* Read the current value to test if filters are possible.
+     * Can return an empty value (v.value.type == NULL). */
+    UA_ReadValueId rvid;
+    UA_ReadValueId_init(&rvid);
+    rvid.nodeId = mon->monitoredNodeId;
+    rvid.attributeId = mon->attributeId;
+    rvid.indexRange = mon->indexRange;
+    UA_DataValue v = UA_Server_readWithSession(server, session, &rvid, mon->timestampsToReturn);
+    UA_StatusCode retval = setMonitoredItemSettings(server, mon, mon->monitoringMode,
+                                                    &request->requestedParameters,
+                                                    v.value.type);
+    UA_DataValue_deleteMembers(&v);
     if(retval != UA_STATUSCODE_GOOD) {
         result->statusCode = retval;
         return;
@@ -437,7 +473,7 @@ Operation_ModifyMonitoredItem(UA_Server *server, UA_Session *session, UA_Subscri
     result->revisedQueueSize = mon->maxQueueSize;
 
     /* Remove some notifications if the queue is now too small */
-    MonitoredItem_ensureQueueSpace(server, mon);
+    UA_MonitoredItem_ensureQueueSpace(server, mon);
 }
 
 void

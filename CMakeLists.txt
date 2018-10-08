@@ -32,7 +32,7 @@ set(LIB_INSTALL_DIR lib CACHE PATH "Installation path of libraries")
 if(GIT_FOUND)
     execute_process(COMMAND ${GIT_EXECUTABLE} describe --always --tags
                     RESULT_VARIABLE res_var OUTPUT_VARIABLE GIT_COM_ID WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    if(${res_var} EQUAL 0)
+    if(${res_var} EQUAL 0 AND NOT OPEN62541_VER_COMMIT STREQUAL "")
         string(REPLACE "\n" "" OPEN62541_VER_COMMIT ${GIT_COM_ID} )
     endif()
 endif()
@@ -52,22 +52,22 @@ endif()
 
 
 option(UA_ENABLE_AMALGAMATION "Concatenate the library to a single file open62541.h/.c" OFF)
-set(UA_AMALGAMATION_ARCHITECUTRES "" CACHE STRING "List of architectures to include in amalgamation")
-mark_as_advanced(UA_AMALGAMATION_ARCHITECUTRES)
+set(UA_AMALGAMATION_ARCHITECTURES "" CACHE STRING "List of architectures to include in amalgamation")
+mark_as_advanced(UA_AMALGAMATION_ARCHITECTURES)
 
 # Platform. This is at the beginning in case the architecture changes some UA options
 set(UA_ARCHITECTURE "None" CACHE STRING "Architecture to build open62541 on")
 
 if(UA_ENABLE_AMALGAMATION)
     if(NOT "${UA_ARCHITECTURE}" STREQUAL "None")
-        set(UA_AMALGAMATION_ARCHITECUTRES "${UA_ARCHITECTURE}")
+        set(UA_AMALGAMATION_ARCHITECTURES "${UA_ARCHITECTURE}")
     else()
-        if("${UA_AMALGAMATION_ARCHITECUTRES}" STREQUAL "")
+        if("${UA_AMALGAMATION_ARCHITECTURES}" STREQUAL "")
             # select some default architectures which should be included
-            set(UA_AMALGAMATION_ARCHITECUTRES "win32;posix")
+            set(UA_AMALGAMATION_ARCHITECTURES "win32;posix")
         endif()
     endif()
-    message(STATUS "Architectures included in amalgamation: ${UA_AMALGAMATION_ARCHITECUTRES}")
+    message(STATUS "Architectures included in amalgamation: ${UA_AMALGAMATION_ARCHITECTURES}")
 endif()
 
 if("${UA_ARCHITECTURE}" STREQUAL "None")
@@ -111,6 +111,15 @@ set(ua_architecture_headers ${ua_architecture_headers}
 if(${UA_ARCHITECTURE} STREQUAL "None")
   message(FATAL_ERROR "No architecture was selected. Please select the architecture of your target platform")
 endif(${UA_ARCHITECTURE} STREQUAL "None")
+
+# Create a list of ifdefs for all the architectures.
+# This is needed to enable a default architecture if none is selected through gcc compiler def.
+# Especially if someone is using the amalgamated file on Linux/Windows he should not need to define an architecture.
+set(UA_ARCHITECTURES_NODEF "1 ") #to make it easier to append later the && symbol
+foreach(arch_ ${architectures})
+    string(TOUPPER ${arch_} UA_ARCHITECTURE_UPPER_)
+    set(UA_ARCHITECTURES_NODEF "${UA_ARCHITECTURES_NODEF} && !defined(UA_ARCHITECTURE_${UA_ARCHITECTURE_UPPER_})")
+endforeach(arch_ ${architectures})
 
 # Options
 set(UA_LOGLEVEL 300 CACHE STRING "Level at which logs shall be reported")
@@ -166,7 +175,7 @@ if(UA_ENABLE_DISCOVERY_MULTICAST AND NOT UA_ENABLE_DISCOVERY)
 endif()
 
 # Advanced options
-option(UA_ENABLE_MULTITHREADING "Enable multithreading (experimental)" OFF)
+option(UA_ENABLE_MULTITHREADING "Enable multithreading (EXPERIMENTAL)" OFF)
 mark_as_advanced(UA_ENABLE_MULTITHREADING)
 
 option(UA_ENABLE_IMMUTABLE_NODES "Nodes in the information model are not edited but copied and replaced" OFF)
@@ -175,15 +184,15 @@ if(UA_ENABLE_MULTITHREADING)
     set(UA_ENABLE_IMMUTABLE_NODES ON)
 endif()
 
-option(UA_ENABLE_PUBSUB "Enable publish/subscribe (experimental)" OFF)
+option(UA_ENABLE_PUBSUB "Enable publish/subscribe" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB)
-option(UA_ENABLE_PUBSUB_DELTAFRAMES "Enable sending of delta frames with only the changes" ON)
+option(UA_ENABLE_PUBSUB_DELTAFRAMES "Enable sending of delta frames with only the changes" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB_DELTAFRAMES)
 option(UA_ENABLE_PUBSUB_INFORMATIONMODEL "Enable PubSub information model twin" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB_INFORMATIONMODEL)
 if(UA_ENABLE_PUBSUB_INFORMATIONMODEL)
     if(NOT UA_ENABLE_PUBSUB)
-    message(FATAL_ERROR "PubSub information model representation cannot be used with disabled PubSub function.")
+        message(FATAL_ERROR "PubSub information model representation cannot be used with disabled PubSub function.")
     endif()
 endif()
 
@@ -246,6 +255,24 @@ if(UA_BUILD_FUZZING)
     add_definitions(-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
 endif()
 
+if(UA_ENABLE_HISTORIZING)
+    set(historizing_exported_headers
+        ${PROJECT_SOURCE_DIR}/include/ua_plugin_historydatabase.h
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_plugin_history_data_backend.h
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_plugin_history_data_gathering.h
+        )
+    set(historizing_default_plugin_headers
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabackend_memory.h
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatagathering_default.h
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabase_default.h
+        )
+    set(historizing_default_plugin_sources
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabackend_memory.c
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatagathering_default.c
+        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabase_default.c
+        )
+endif()
+
 option(UA_BUILD_FUZZING_CORPUS "Build the fuzzing corpus" OFF)
 mark_as_advanced(UA_BUILD_FUZZING_CORPUS)
 if(UA_BUILD_FUZZING_CORPUS)
@@ -268,6 +295,15 @@ if(BUILD_SHARED_LIBS)
   if (UA_ENABLE_DISCOVERY_MULTICAST)
       set(MDNSD_DYNAMIC_LINKING ON)
   endif()
+endif()
+
+# Warn if experimental features are enabled
+if(UA_ENABLE_SUBSCRIPTIONS_EVENTS)
+    MESSAGE(WARNING "UA_ENABLE_SUBSCRIPTIONS_EVENTS is enabled. The feature is under development and marked as EXPERIMENTAL")
+endif()
+
+if(UA_ENABLE_MULTITHREADING)
+    MESSAGE(WARNING "UA_ENABLE_MULTITHREADING is enabled. The feature is under development and marked as EXPERIMENTAL")
 endif()
 
 ######################
@@ -392,18 +428,22 @@ include_directories(${PROJECT_SOURCE_DIR}/include
                     ${PROJECT_BINARY_DIR}/src_generated
                     ${MBEDTLS_INCLUDE_DIRS})
 
-if(NOT "${UA_AMALGAMATION_ARCHITECUTRES}" STREQUAL "")
-    set(exported_headers)
-    foreach(arch ${UA_AMALGAMATION_ARCHITECUTRES})
+set(exported_headers ${exported_headers}
+                     ${PROJECT_BINARY_DIR}/src_generated/ua_config.h
+                     ${ua_architecture_headers_beginning}
+                     )
+
+if(NOT "${UA_AMALGAMATION_ARCHITECTURES}" STREQUAL "")
+    foreach(arch ${UA_AMALGAMATION_ARCHITECTURES})
         list(APPEND exported_headers ${PROJECT_SOURCE_DIR}/arch/${arch}/ua_architecture.h)
     endforeach()
 else()
-    set(exported_headers ${PROJECT_SOURCE_DIR}/arch/${UA_ARCHITECTURE}/ua_architecture.h)
+    list(APPEND exported_headers ${PROJECT_SOURCE_DIR}/arch/${UA_ARCHITECTURE}/ua_architecture.h)
 endif()
 
+list(APPEND exported_headers ${PROJECT_SOURCE_DIR}/arch/ua_architecture_definitions.h)
+
 set(exported_headers ${exported_headers}
-                     ${ua_architecture_headers_beginning}
-                     ${PROJECT_BINARY_DIR}/src_generated/ua_config.h
                      ${PROJECT_SOURCE_DIR}/deps/ms_stdint.h
                      ${PROJECT_BINARY_DIR}/src_generated/ua_statuscodes.h
                      ${PROJECT_BINARY_DIR}/src_generated/ua_nodeids.h
@@ -413,6 +453,7 @@ set(exported_headers ${exported_headers}
                      ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated_handling.h
                      ${PROJECT_SOURCE_DIR}/include/ua_util.h
                      ${PROJECT_SOURCE_DIR}/include/ua_server.h
+                     ${historizing_exported_headers}
                      ${PROJECT_SOURCE_DIR}/include/ua_plugin_log.h
                      ${PROJECT_SOURCE_DIR}/include/ua_plugin_network.h
                      ${PROJECT_SOURCE_DIR}/include/ua_plugin_access_control.h
@@ -440,6 +481,7 @@ set(internal_headers ${PROJECT_SOURCE_DIR}/deps/queue.h
                      ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated_encoding_binary.h
                      ${PROJECT_SOURCE_DIR}/src/ua_connection_internal.h
                      ${PROJECT_SOURCE_DIR}/src/ua_securechannel.h
+                     ${PROJECT_SOURCE_DIR}/src/ua_workqueue.h
                      ${PROJECT_SOURCE_DIR}/src/ua_timer.h
                      ${PROJECT_SOURCE_DIR}/src/server/ua_session.h
                      ${PROJECT_SOURCE_DIR}/src/server/ua_subscription.h
@@ -461,6 +503,7 @@ set(lib_sources ${PROJECT_SOURCE_DIR}/src/ua_types.c
                 ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated.c
                 ${PROJECT_BINARY_DIR}/src_generated/ua_statuscodes.c
                 ${PROJECT_SOURCE_DIR}/src/ua_util.c
+                ${PROJECT_SOURCE_DIR}/src/ua_workqueue.c
                 ${PROJECT_SOURCE_DIR}/src/ua_timer.c
                 ${PROJECT_SOURCE_DIR}/src/ua_connection.c
                 ${PROJECT_SOURCE_DIR}/src/ua_securechannel.c
@@ -471,13 +514,9 @@ set(lib_sources ${PROJECT_SOURCE_DIR}/src/ua_types.c
                 ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_binary.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_utils.c
-                ${PROJECT_SOURCE_DIR}/src/server/ua_server_worker.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_server_discovery.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_securechannel_manager.c
                 ${PROJECT_SOURCE_DIR}/src/server/ua_session_manager.c
-                ${PROJECT_SOURCE_DIR}/src/server/ua_subscription.c
-                ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_datachange.c
-                ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_events.c
                 ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_networkmessage.c
                 ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub.c
                 ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_manager.c
@@ -507,15 +546,17 @@ set(lib_sources ${PROJECT_SOURCE_DIR}/src/ua_types.c
                 ${PROJECT_SOURCE_DIR}/deps/base64.c)
 
 set(default_plugin_headers ${PROJECT_SOURCE_DIR}/plugins/ua_accesscontrol_default.h
+                           ${historizing_default_plugin_headers}
                            ${PROJECT_SOURCE_DIR}/plugins/ua_pki_certificate.h
                            ${PROJECT_SOURCE_DIR}/plugins/ua_log_stdout.h
                            ${PROJECT_SOURCE_DIR}/plugins/ua_nodestore_default.h
                            ${PROJECT_SOURCE_DIR}/plugins/ua_config_default.h
-                           ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_none.h
+                           ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicies.h
 )
 
 set(default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/ua_log_stdout.c
                            ${PROJECT_SOURCE_DIR}/plugins/ua_accesscontrol_default.c
+                           ${historizing_default_plugin_sources}
                            ${PROJECT_SOURCE_DIR}/plugins/ua_pki_certificate.c
                            ${PROJECT_SOURCE_DIR}/plugins/ua_nodestore_default.c
                            ${PROJECT_SOURCE_DIR}/plugins/ua_config_default.c
@@ -523,8 +564,6 @@ set(default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/ua_log_stdout.c
 )
 
 if(UA_ENABLE_ENCRYPTION)
-    list(APPEND default_plugin_headers ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_basic128rsa15.h
-                                       ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_basic256sha256.h)
     list(APPEND default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_basic128rsa15.c
                                        ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_basic256sha256.c)
 endif()
@@ -534,6 +573,14 @@ if(UA_ENABLE_PUBSUB)
     list(APPEND default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_udp.c)
 endif()
 
+if(UA_ENABLE_SUBSCRIPTIONS)
+    list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/server/ua_subscription.c
+                            ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_monitoreditem.c
+                            ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_datachange.c)
+    if(UA_ENABLE_SUBSCRIPTIONS_EVENTS)
+        list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/server/ua_subscription_events.c)
+    endif()
+endif()
 
 if(UA_DEBUG_DUMP_PKGS)
     list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/plugins/ua_debug_dump_pkgs.c)
@@ -587,6 +634,10 @@ else()
 
     if(UA_ENABLE_SUBSCRIPTIONS)
         list(APPEND UA_FILE_DATATYPES ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_subscriptions.txt)
+    endif()
+
+    if(UA_ENABLE_HISTORIZING)
+        list(APPEND UA_FILE_DATATYPES ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_historizing.txt)
     endif()
 
     if(UA_ENABLE_DISCOVERY)
@@ -709,13 +760,6 @@ add_dependencies(open62541-amalgamation-header open62541-generator-types)
 add_dependencies(open62541-amalgamation-source open62541-generator-types
                  open62541-generator-transport open62541-generator-statuscode)
 
-
-set(NODESET_MAX_STR_LEN 0)
-if(MSVC)
-    # Visual Studio has a maximum string length of 65535 bytes
-    set(NODESET_MAX_STR_LEN 65535)
-endif()
-
 if(NOT UA_NODESET_ENCODE_BINARY_SIZE)
     set(UA_NODESET_ENCODE_BINARY_SIZE 32000)
 endif()
@@ -727,7 +771,6 @@ add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.c
                    COMMAND ${PYTHON_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/nodeset_compiler.py
                            --generate-ns0
                            --internal-headers
-                           --max-string-length=${NODESET_MAX_STR_LEN}
                            --encode-binary-size=${UA_NODESET_ENCODE_BINARY_SIZE}
                            --ignore ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/NodeID_NS0_Base.txt
                            --xml ${UA_FILE_NS0}
@@ -838,6 +881,8 @@ endif(NOT "${ua_architecture_remove_definitions}" STREQUAL "")
 GET_PROPERTY(ua_architecture_append_to_library GLOBAL PROPERTY UA_ARCHITECTURE_APPEND_TO_LIBRARY)
 list(APPEND open62541_LIBRARIES ${ua_architecture_append_to_library})
 
+target_compile_definitions(open62541 PUBLIC UA_ARCHITECTURE_${UA_ARCHITECTURE_UPPER})
+
 # DLL requires linking to dependencies
 target_link_libraries(open62541 ${open62541_LIBRARIES})
 
@@ -911,7 +956,7 @@ add_custom_target(cpplint cpplint
 # specify install location with `-DCMAKE_INSTALL_PREFIX=xyz`
 # Enable shared library with `-DBUILD_SHARED_LIBS=ON`
 
-set(cmake_configfile_install ${LIB_INSTALL_DIR}/cmake)
+set(cmake_configfile_install ${LIB_INSTALL_DIR}/cmake/open62541)
 set(target_install_dest_name "${cmake_configfile_install}/open62541Targets.cmake")
 set(open62541_tools_dir share/open62541/tools)
 set(open62541_deps_dir include/open62541/deps)

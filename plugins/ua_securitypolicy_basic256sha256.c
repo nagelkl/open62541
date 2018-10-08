@@ -17,10 +17,9 @@
 #include <mbedtls/version.h>
 #include <mbedtls/sha1.h>
 
-#include "ua_plugin_pki.h"
-#include "ua_plugin_securitypolicy.h"
-#include "ua_securitypolicy_basic256sha256.h"
 #include "ua_types.h"
+#include "ua_plugin_pki.h"
+#include "ua_securitypolicies.h"
 #include "ua_types_generated_handling.h"
 
 /* Notes:
@@ -544,7 +543,7 @@ sym_generateKey_sp_basic256sha256(const UA_SecurityPolicy *securityPolicy,
         if(offset + hashLen > out->length) {
             outSegment.data = NULL;
             outSegment.length = 0;
-            retval |= UA_ByteString_allocBuffer(&outSegment, hashLen);
+            retval = UA_ByteString_allocBuffer(&outSegment, hashLen);
             if(retval != UA_STATUSCODE_GOOD) {
                 UA_ByteString_deleteMembers(&A_and_seed);
                 UA_ByteString_deleteMembers(&ANext_and_seed);
@@ -781,6 +780,55 @@ deleteMembers_sp_basic256sha256(UA_SecurityPolicy *securityPolicy) {
 }
 
 static UA_StatusCode
+updateCertificateAndPrivateKey_sp_basic256sha256(UA_SecurityPolicy *securityPolicy,
+                                                 const UA_ByteString newCertificate,
+                                                 const UA_ByteString newPrivateKey) {
+    if(securityPolicy == NULL)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    if(securityPolicy->policyContext == NULL)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    Basic256Sha256_PolicyContext *pc =
+            (Basic256Sha256_PolicyContext *) securityPolicy->policyContext;
+
+    UA_ByteString_deleteMembers(&securityPolicy->localCertificate);
+
+    UA_StatusCode retval =
+            UA_ByteString_allocBuffer(&securityPolicy->localCertificate, newCertificate.length + 1);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
+    memcpy(securityPolicy->localCertificate.data, newCertificate.data, newCertificate.length);
+    securityPolicy->localCertificate.data[newCertificate.length] = '\0';
+    securityPolicy->localCertificate.length--;
+
+    /* Set the new private key */
+    mbedtls_pk_free(&pc->localPrivateKey);
+    mbedtls_pk_init(&pc->localPrivateKey);
+    int mbedErr = mbedtls_pk_parse_key(&pc->localPrivateKey,
+                                       newPrivateKey.data, newPrivateKey.length,
+                                       NULL, 0);
+    UA_MBEDTLS_ERRORHANDLING(UA_STATUSCODE_BADSECURITYCHECKSFAILED);
+    if(retval != UA_STATUSCODE_GOOD)
+        goto error;
+
+    retval = asym_makeThumbprint_sp_basic256sha256(pc->securityPolicy,
+                                                   &securityPolicy->localCertificate,
+                                                   &pc->localCertThumbprint);
+    if(retval != UA_STATUSCODE_GOOD)
+        goto error;
+
+    return retval;
+
+    error:
+    UA_LOG_ERROR(securityPolicy->logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                 "Could not update certificate and private key");
+    if(securityPolicy->policyContext != NULL)
+        deleteMembers_sp_basic256sha256(securityPolicy);
+    return retval;
+}
+
+static UA_StatusCode
 policyContext_newContext_sp_basic256sha256(UA_SecurityPolicy *securityPolicy,
                                            const UA_ByteString localPrivateKey) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
@@ -882,7 +930,7 @@ UA_SecurityPolicy_Basic256Sha256(UA_SecurityPolicy *policy, UA_CertificateVerifi
     UA_SecurityPolicySignatureAlgorithm *asym_signatureAlgorithm =
         &asymmetricModule->cryptoModule.signatureAlgorithm;
     asym_signatureAlgorithm->uri =
-        UA_STRING("http://www.w3.org/2000/09/xmldsig#rsa-sha1\0");
+        UA_STRING("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256\0");
     asym_signatureAlgorithm->verify =
         (UA_StatusCode (*)(const UA_SecurityPolicy *, void *,
                            const UA_ByteString *, const UA_ByteString *))asym_verify_sp_basic256sha256;
@@ -898,7 +946,7 @@ UA_SecurityPolicy_Basic256Sha256(UA_SecurityPolicy *policy, UA_CertificateVerifi
 
     UA_SecurityPolicyEncryptionAlgorithm *asym_encryptionAlgorithm =
         &asymmetricModule->cryptoModule.encryptionAlgorithm;
-    asym_encryptionAlgorithm->uri = UA_STRING("TODO: ALG URI");
+    asym_encryptionAlgorithm->uri = UA_STRING("http://www.w3.org/2001/04/xmlenc#rsa-oaep\0");
     asym_encryptionAlgorithm->encrypt =
         (UA_StatusCode(*)(const UA_SecurityPolicy *, void *, UA_ByteString *))asym_encrypt_sp_basic256sha256;
     asym_encryptionAlgorithm->decrypt =
@@ -985,6 +1033,7 @@ UA_SecurityPolicy_Basic256Sha256(UA_SecurityPolicy *policy, UA_CertificateVerifi
     channelModule->compareCertificate = (UA_StatusCode (*)(const void *, const UA_ByteString *))
         channelContext_compareCertificate_sp_basic256sha256;
 
+    policy->updateCertificateAndPrivateKey = updateCertificateAndPrivateKey_sp_basic256sha256;
     policy->deleteMembers = deleteMembers_sp_basic256sha256;
 
     return policyContext_newContext_sp_basic256sha256(policy, localPrivateKey);
