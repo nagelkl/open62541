@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
  *
- *    Copyright 2014-2017 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
+ *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2016-2017 (c) Florian Palm
  *    Copyright 2015 (c) Chris Iatrou
  *    Copyright 2015-2016 (c) Sten Grüner
@@ -27,7 +27,7 @@
         else DST = SRC;                                \
     }
 
-static void
+static UA_StatusCode
 setSubscriptionSettings(UA_Server *server, UA_Subscription *subscription,
                         UA_Double requestedPublishingInterval,
                         UA_UInt32 requestedLifetimeCount,
@@ -35,10 +35,12 @@ setSubscriptionSettings(UA_Server *server, UA_Subscription *subscription,
                         UA_UInt32 maxNotificationsPerPublish, UA_Byte priority) {
     /* deregister the callback if required */
     UA_StatusCode retval = Subscription_unregisterPublishCallback(server, subscription);
-    if(retval != UA_STATUSCODE_GOOD)
+    if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_DEBUG_SESSION(server->config.logger, subscription->session,
                              "Subscription %u | Could not unregister publish callback with error code %s",
                              subscription->subscriptionId, UA_StatusCode_name(retval));
+        return retval;
+    }
 
     /* re-parameterize the subscription */
     subscription->publishingInterval = requestedPublishingInterval;
@@ -60,10 +62,13 @@ setSubscriptionSettings(UA_Server *server, UA_Subscription *subscription,
     subscription->priority = priority;
 
     retval = Subscription_registerPublishCallback(server, subscription);
-    if(retval != UA_STATUSCODE_GOOD)
+    if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_DEBUG_SESSION(server->config.logger, subscription->session,
                              "Subscription %u | Could not register publish callback with error code %s",
                              subscription->subscriptionId, UA_StatusCode_name(retval));
+        return retval;
+    }
+    return UA_STATUSCODE_GOOD;
 }
 
 void
@@ -90,9 +95,15 @@ Service_CreateSubscription(UA_Server *server, UA_Session *session,
 
     /* Set the subscription parameters */
     newSubscription->publishingEnabled = request->publishingEnabled;
-    setSubscriptionSettings(server, newSubscription, request->requestedPublishingInterval,
-                            request->requestedLifetimeCount, request->requestedMaxKeepAliveCount,
-                            request->maxNotificationsPerPublish, request->priority);
+    UA_StatusCode retval = setSubscriptionSettings(server, newSubscription, request->requestedPublishingInterval,
+                                                   request->requestedLifetimeCount, request->requestedMaxKeepAliveCount,
+                                                   request->maxNotificationsPerPublish, request->priority);
+
+    if(retval != UA_STATUSCODE_GOOD) {
+        response->responseHeader.serviceResult = retval;
+        return;
+    }
+
     newSubscription->currentKeepAliveCount = newSubscription->maxKeepAliveCount; /* set settings first */
 
     /* Prepare the response */
@@ -118,9 +129,15 @@ Service_ModifySubscription(UA_Server *server, UA_Session *session,
         return;
     }
 
-    setSubscriptionSettings(server, sub, request->requestedPublishingInterval,
-                            request->requestedLifetimeCount, request->requestedMaxKeepAliveCount,
-                            request->maxNotificationsPerPublish, request->priority);
+    UA_StatusCode retval = setSubscriptionSettings(server, sub, request->requestedPublishingInterval,
+                                                   request->requestedLifetimeCount, request->requestedMaxKeepAliveCount,
+                                                   request->maxNotificationsPerPublish, request->priority);
+
+    if(retval != UA_STATUSCODE_GOOD) {
+        response->responseHeader.serviceResult = retval;
+        return;
+    }
+
     sub->currentLifetimeCount = 0; /* Reset the subscription lifetime */
     response->revisedPublishingInterval = sub->publishingInterval;
     response->revisedLifetimeCount = sub->lifeTimeCount;
@@ -170,7 +187,7 @@ setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
         case UA_DEADBANDTYPE_NONE:
             break;
         case UA_DEADBANDTYPE_ABSOLUTE:
-            if(!dataType || !isDataTypeNumeric(dataType))
+            if(!dataType || !UA_DataType_isNumeric(dataType))
                 return UA_STATUSCODE_BADFILTERNOTALLOWED;
             break;
         case UA_DEADBANDTYPE_PERCENT:
@@ -237,7 +254,8 @@ setMonitoredItemSettings(UA_Server *server, UA_MonitoredItem *mon,
     /* Register sample callback if reporting is enabled */
     mon->monitoringMode = monitoringMode;
     if(monitoringMode == UA_MONITORINGMODE_REPORTING)
-        UA_MonitoredItem_registerSampleCallback(server, mon);
+        return UA_MonitoredItem_registerSampleCallback(server, mon);
+
     return UA_STATUSCODE_GOOD;
 }
 
@@ -542,7 +560,7 @@ Operation_SetMonitoringMode(UA_Server *server, UA_Session *session,
 
     mon->monitoringMode = smc->monitoringMode;
     if(mon->monitoringMode == UA_MONITORINGMODE_REPORTING) {
-        UA_MonitoredItem_registerSampleCallback(server, mon);
+        *result = UA_MonitoredItem_registerSampleCallback(server, mon);
     } else {
         UA_MonitoredItem_unregisterSampleCallback(server, mon);
 
@@ -550,7 +568,8 @@ Operation_SetMonitoringMode(UA_Server *server, UA_Session *session,
         /*  Setting the mode to DISABLED or SAMPLING causes all queued Notifications to be deleted */
         UA_Notification *notification, *notification_tmp;
         TAILQ_FOREACH_SAFE(notification, &mon->queue, listEntry, notification_tmp) {
-            UA_Notification_delete(smc->sub, mon, notification);
+            UA_Notification_dequeue(server, notification);
+            UA_Notification_delete(notification);
         }
 
         /* Initialize lastSampledValue */

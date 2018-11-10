@@ -17,7 +17,6 @@
  *    Copyright 2018 (c) Kalycito Infotech Private Limited
  */
 
-#include "ua_client.h"
 #include "ua_client_internal.h"
 #include "ua_connection_internal.h"
 #include "ua_types_encoding_binary.h"
@@ -326,8 +325,7 @@ processAsyncResponse(UA_Client *client, UA_UInt32 requestId, const UA_NodeId *re
     }
 
     /* Decode the response */
-    retval = UA_decodeBinary(responseMessage, offset, response,
-                             responseType, 0, NULL);
+    retval = UA_decodeBinary(responseMessage, offset, response, responseType, NULL);
 
  process:
     if(retval != UA_STATUSCODE_GOOD) {
@@ -338,7 +336,8 @@ processAsyncResponse(UA_Client *client, UA_UInt32 requestId, const UA_NodeId *re
     }
 
     /* Call the callback */
-    ac->callback(client, ac->userdata, requestId, response);
+    if(ac->callback)
+        ac->callback(client, ac->userdata, requestId, response);
     UA_deleteMembers(response, ac->responseType);
 
     /* Remove the callback */
@@ -392,7 +391,7 @@ processServiceResponse(void *application, UA_SecureChannel *channel,
                          "Received a ServiceFault response");
             UA_init(rd->response, rd->responseType);
             retval = UA_decodeBinary(message, &offset, rd->response,
-                                     &UA_TYPES[UA_TYPES_SERVICEFAULT], 0, NULL);
+                                     &UA_TYPES[UA_TYPES_SERVICEFAULT], NULL);
         } else {
             /* Close the connection */
             UA_LOG_ERROR(rd->client->config.logger, UA_LOGCATEGORY_CLIENT,
@@ -412,7 +411,6 @@ processServiceResponse(void *application, UA_SecureChannel *channel,
 
     /* Decode the response */
     retval = UA_decodeBinary(message, &offset, rd->response, rd->responseType,
-                             rd->client->config.customDataTypesSize,
                              rd->client->config.customDataTypes);
 
 finish:
@@ -435,7 +433,7 @@ finish:
 static UA_StatusCode
 client_processChunk(void *application, UA_Connection *connection, UA_ByteString *chunk) {
     SyncResponseDescription *rd = (SyncResponseDescription*)application;
-    UA_StatusCode retval = UA_SecureChannel_decryptAddChunk(&rd->client->channel, chunk, UA_TRUE);
+    UA_StatusCode retval = UA_SecureChannel_decryptAddChunk(&rd->client->channel, chunk, true);
     if(retval != UA_STATUSCODE_GOOD)
         return retval;
     return UA_SecureChannel_persistIncompleteMessages(&rd->client->channel);
@@ -557,7 +555,8 @@ UA_Client_AsyncService_cancel(UA_Client *client, AsyncServiceCall *ac,
     UA_init(resp, ac->responseType);
     ((UA_ResponseHeader*)resp)->serviceResult = statusCode;
 
-    ac->callback(client, ac->userdata, ac->requestId, resp);
+    if(ac->callback)
+        ac->callback(client, ac->userdata, ac->requestId, resp);
 
     /* Clean up the response. Users might move data into it. For whatever reasons. */
     UA_deleteMembers(resp, ac->responseType);

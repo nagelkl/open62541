@@ -14,6 +14,7 @@
 #ifndef UA_UTIL_H_
 #define UA_UTIL_H_
 
+#define UA_INTERNAL
 #include "ua_types.h"
 #include "../deps/queue.h"
 
@@ -147,6 +148,9 @@ UA_atomic_subSize(volatile size_t *addr, size_t decrease) {
  * digits. Stops if a non-digit char is found and returns the number of digits
  * up to that point. */
 size_t UA_readNumber(u8 *buf, size_t buflen, u32 *number);
+
+/* Same as UA_ReadNumber but with a base parameter */
+size_t UA_readNumberWithBase(u8 *buf, size_t buflen, u32 *number, u8 base);
 
 #ifndef UA_MIN
 #define UA_MIN(A,B) (A > B ? B : A)

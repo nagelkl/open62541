@@ -14,6 +14,7 @@ import re
 import xml.etree.ElementTree as etree
 import itertools
 import argparse
+import csv
 from nodeset_compiler.opaque_type_mapping import opaque_type_mapping, get_base_type_for_opaque
 
 types = OrderedDict() # contains types that were already parsed
@@ -78,6 +79,16 @@ class StructMember(object):
         self.memberType = memberType
         self.isArray = isArray
 
+def getNodeidTypeAndId(nodeId):
+    if not '=' in nodeId:
+        return "UA_NODEIDTYPE_NUMERIC, {{{0}}}".format(nodeId)
+    if nodeId.startswith("i="):
+        return "UA_NODEIDTYPE_NUMERIC, {{{0}}}".format(nodeId[2:])
+    if nodeId.startswith("s="):
+        strId = nodeId[2:]
+        return "UA_NODEIDTYPE_STRING, {{ .string = UA_STRING_STATIC(\"{id}\") }}".format(id=strId.replace("\"", "\\\""))
+
+
 class Type(object):
     def __init__(self, outname, xml, namespace):
         self.name = xml.get("Name")
@@ -102,7 +113,7 @@ class Type(object):
         binaryEncodingId = "0"
         if self.name in typedescriptions:
             description = typedescriptions[self.name]
-            typeid = "{%s, UA_NODEIDTYPE_NUMERIC, {%s}}" % (description.namespaceid, description.nodeid)
+            typeid = "{%s, %s}" % (description.namespaceid, getNodeidTypeAndId(description.nodeid))
             xmlEncodingId = description.xmlEncodingId
             binaryEncodingId = description.binaryEncodingId
         else:
@@ -177,7 +188,7 @@ class Type(object):
         idName = makeCIdentifier(self.name)
         enc = "static UA_INLINE size_t\nUA_%s_calcSizeBinary(const UA_%s *src) {\n    return UA_calcSizeBinary(src, %s);\n}\n"
         enc += "static UA_INLINE UA_StatusCode\nUA_%s_encodeBinary(const UA_%s *src, UA_Byte **bufPos, const UA_Byte *bufEnd) {\n    return UA_encodeBinary(src, %s, bufPos, &bufEnd, NULL, NULL);\n}\n"
-        enc += "static UA_INLINE UA_StatusCode\nUA_%s_decodeBinary(const UA_ByteString *src, size_t *offset, UA_%s *dst) {\n    return UA_decodeBinary(src, offset, dst, %s, 0, NULL);\n}"
+        enc += "static UA_INLINE UA_StatusCode\nUA_%s_decodeBinary(const UA_ByteString *src, size_t *offset, UA_%s *dst) {\n    return UA_decodeBinary(src, offset, dst, %s, NULL);\n}"
         return enc % tuple(list(itertools.chain(*itertools.repeat([idName, idName, self.datatype_ptr()], 3))))
 
 class BuiltinType(Type):
@@ -256,9 +267,9 @@ class StructType(Type):
                 self.pointerfree = "false"
                 self.overlayable = "false"
             else:
-                self.overlayable += " && " + m.memberType.overlayable
+                self.overlayable += "\n\t\t && " + m.memberType.overlayable
                 if before:
-                    self.overlayable += " && offsetof(UA_%s, %s) == (offsetof(UA_%s, %s) + sizeof(UA_%s))" % \
+                    self.overlayable += "\n\t\t && offsetof(UA_%s, %s) == (offsetof(UA_%s, %s) + sizeof(UA_%s))" % \
                                         (makeCIdentifier(self.name), makeCIdentifier(m.name), makeCIdentifier(self.name), makeCIdentifier(before.name), makeCIdentifier(before.memberType.name))
             if "false" in self.overlayable:
                 self.overlayable = "false"
@@ -354,13 +365,11 @@ class TypeDescription(object):
 
 def parseTypeDescriptions(f, namespaceid):
     definitions = {}
-    input_str = f.read()
-    input_str = input_str.replace('\r','')
-    rows = map(lambda x:tuple(x.split(',')), input_str.split('\n'))
 
+    csvreader = csv.reader(f, delimiter=',')
     delay_init = []
 
-    for index, row in enumerate(rows):
+    for index, row in enumerate(csvreader):
         if len(row) < 3:
             continue
         if row[2] == "Object":

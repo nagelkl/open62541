@@ -259,9 +259,19 @@ NodeId_copy(UA_NodeId const *src, UA_NodeId *dst, const UA_DataType *_) {
 
 UA_Boolean
 UA_NodeId_isNull(const UA_NodeId *p) {
-    return p->namespaceIndex == 0 &&
-        p->identifierType == UA_NODEIDTYPE_NUMERIC &&
-        p->identifier.numeric == 0;
+    if(p->namespaceIndex != 0)
+        return false;
+    switch (p->identifierType) {
+    case UA_NODEIDTYPE_NUMERIC:
+        return (p->identifier.numeric == 0);
+    case UA_NODEIDTYPE_STRING:
+        return UA_String_equal(&p->identifier.string, &UA_STRING_NULL);
+    case UA_NODEIDTYPE_GUID:
+        return UA_Guid_equal(&p->identifier.guid, &UA_GUID_NULL);
+    case UA_NODEIDTYPE_BYTESTRING:
+        return UA_ByteString_equal(&p->identifier.byteString, &UA_BYTESTRING_NULL);
+    }
+    return false;
 }
 
 UA_Boolean
@@ -1085,10 +1095,10 @@ UA_Array_delete(void *p, size_t size, const UA_DataType *type) {
 }
 
 UA_Boolean
-isDataTypeNumeric(const UA_DataType *type) {
-    // All data types ids between UA_TYPES_SBYTE and UA_TYPES_DOUBLE are numeric
-    for (int i = UA_TYPES_SBYTE; i <= UA_TYPES_DOUBLE; ++i)
-        if (&UA_TYPES[i] == type)
+UA_DataType_isNumeric(const UA_DataType *type) {
+    /* All data types between UA_TYPES_BOOLEAN and UA_TYPES_DOUBLE are numeric */
+    for(size_t i = UA_TYPES_BOOLEAN; i <= UA_TYPES_DOUBLE; ++i)
+        if(&UA_TYPES[i] == type)
             return true;
     return false;
 }

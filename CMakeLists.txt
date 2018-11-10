@@ -186,8 +186,18 @@ endif()
 
 option(UA_ENABLE_PUBSUB "Enable publish/subscribe" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB)
+
+option(UA_ENABLE_PUBSUB_ETH_UADP "Enable publish/subscribe UADP over Ethernet" OFF)
+mark_as_advanced(UA_ENABLE_PUBSUB_ETH_UADP)
+if(UA_ENABLE_PUBSUB_ETH_UADP)
+    if (NOT CMAKE_SYSTEM MATCHES "Linux")
+    message(FATAL_ERROR "UADP over Ethernet is only available on Linux.")
+	endif()
+endif()
+
 option(UA_ENABLE_PUBSUB_DELTAFRAMES "Enable sending of delta frames with only the changes" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB_DELTAFRAMES)
+
 option(UA_ENABLE_PUBSUB_INFORMATIONMODEL "Enable PubSub information model twin" OFF)
 mark_as_advanced(UA_ENABLE_PUBSUB_INFORMATIONMODEL)
 if(UA_ENABLE_PUBSUB_INFORMATIONMODEL)
@@ -571,6 +581,10 @@ endif()
 if(UA_ENABLE_PUBSUB)
     list(APPEND default_plugin_headers ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_udp.h)
     list(APPEND default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_udp.c)
+    if(UA_ENABLE_PUBSUB_ETH_UADP)
+        list(APPEND default_plugin_headers ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_ethernet.h)
+        list(APPEND default_plugin_sources ${PROJECT_SOURCE_DIR}/plugins/ua_network_pubsub_ethernet.c)
+    endif()
 endif()
 
 if(UA_ENABLE_SUBSCRIPTIONS)
@@ -651,7 +665,7 @@ else()
     if(UA_ENABLE_PUBSUB)
         list(APPEND UA_FILE_DATATYPES ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_pubsub.txt)
         if(UA_ENABLE_PUBSUB_INFORMATIONMODEL)
-            set(UA_FILE_NSPUBSUB --xml ${PROJECT_SOURCE_DIR}/tools/schema/Opc.Ua.NodeSet2.PubSubMinimal.xml)
+            set(UA_FILE_NSPUBSUB ${PROJECT_SOURCE_DIR}/tools/schema/Opc.Ua.NodeSet2.PubSubMinimal.xml)
         endif()
     endif()
 endif()
@@ -660,57 +674,26 @@ if(NOT EXISTS "${UA_FILE_NS0}")
     message(FATAL_ERROR "File ${UA_FILE_NS0} not found. You probably need to initialize the git submodule for deps/ua-nodeset.")
 endif()
 
-set(SELECTED_TYPES_TMP "")
-foreach(f ${UA_FILE_DATATYPES})
-    set(SELECTED_TYPES_TMP ${SELECTED_TYPES_TMP} "--selected-types=${f}")
-endforeach()
-
 # standard-defined data types
-add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated.c
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated.h
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated_handling.h
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated_encoding_binary.h
-                   PRE_BUILD
-                   COMMAND ${PYTHON_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/generate_datatypes.py
-                           --type-csv=${UA_FILE_NODEIDS}
-                           ${SELECTED_TYPES_TMP}
-                           --type-bsd=${UA_FILE_TYPES_BSD}
-                           ${PROJECT_BINARY_DIR}/src_generated/ua_types
-                   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_datatypes.py
-                           ${UA_FILE_NODEIDS}
-                           ${UA_FILE_TYPES_BSD}
-                           ${UA_FILE_DATATYPES})
-# we need a custom target to avoid that the generator is called concurrently and thus overwriting files while the other thread is compiling
-add_custom_target(open62541-generator-types DEPENDS
-                  ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated.c
-                  ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated.h
-                  ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated_handling.h
-                  ${PROJECT_BINARY_DIR}/src_generated/ua_types_generated_encoding_binary.h)
+ua_generate_datatypes(
+    BUILTIN
+    NAME "ua_types"
+    TARGET_SUFFIX "types"
+    NAMESPACE_IDX 0
+    FILE_CSV "${UA_FILE_NODEIDS}"
+    FILES_BSD "${UA_FILE_TYPES_BSD}"
+    FILES_SELECTED ${UA_FILE_DATATYPES}
+)
 
 # transport data types
-add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated.c
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated.h
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated_handling.h
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated_encoding_binary.h
-                   PRE_BUILD
-                   COMMAND ${PYTHON_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/generate_datatypes.py
-                           --namespace=1
-                           --selected-types=${PROJECT_SOURCE_DIR}/tools/schema/datatypes_transport.txt
-                           --type-bsd=${UA_FILE_TYPES_BSD}
-                           --type-bsd=${PROJECT_SOURCE_DIR}/tools/schema/Custom.Opc.Ua.Transport.bsd
-                           --no-builtin
-                           ${PROJECT_BINARY_DIR}/src_generated/ua_transport
-                   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_datatypes.py
-                           ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_transport.txt
-                           ${UA_FILE_TYPES_BSD}
-                           ${PROJECT_SOURCE_DIR}/tools/schema/Custom.Opc.Ua.Transport.bsd)
-
-# we need a custom target to avoid that the generator is called concurrently and thus overwriting files while the other thread is compiling
-add_custom_target(open62541-generator-transport DEPENDS
-        ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated.c
-        ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated.h
-        ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated_handling.h
-        ${PROJECT_BINARY_DIR}/src_generated/ua_transport_generated_encoding_binary.h)
+ua_generate_datatypes(
+    NAME "ua_transport"
+    TARGET_SUFFIX "transport"
+    NAMESPACE_IDX 1
+    FILE_CSV "${UA_FILE_NODEIDS}"
+    FILES_BSD "${UA_FILE_TYPES_BSD}" "${PROJECT_SOURCE_DIR}/tools/schema/Custom.Opc.Ua.Transport.bsd"
+    FILES_SELECTED "${PROJECT_SOURCE_DIR}/tools/schema/datatypes_transport.txt"
+)
 
 # statuscode explanation
 add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/src_generated/ua_statuscodes.h
@@ -764,36 +747,19 @@ if(NOT UA_NODESET_ENCODE_BINARY_SIZE)
     set(UA_NODESET_ENCODE_BINARY_SIZE 32000)
 endif()
 
-# generated namespace 0
-add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.c
-                          ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.h
-                   PRE_BUILD
-                   COMMAND ${PYTHON_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/nodeset_compiler.py
-                           --generate-ns0
-                           --internal-headers
-                           --encode-binary-size=${UA_NODESET_ENCODE_BINARY_SIZE}
-                           --ignore ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/NodeID_NS0_Base.txt
-                           --xml ${UA_FILE_NS0}
-                           ${UA_FILE_NSPUBSUB}
-                           ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0
-                   DEPENDS ${UA_FILE_NS0}
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/nodeset_compiler.py
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/nodes.py
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/nodeset.py
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/datatypes.py
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/backend_open62541.py
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/backend_open62541_nodes.py
-                           ${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/backend_open62541_datatypes.py)
+ua_generate_nodeset(
+    NAME "ns0"
+    FILE "${UA_FILE_NS0}" "${UA_FILE_NSPUBSUB}"
+    INTERNAL
+    IGNORE "${PROJECT_SOURCE_DIR}/tools/nodeset_compiler/NodeID_NS0_Base.txt"
+    ENCODE_BINARY_SIZE ${UA_NODESET_ENCODE_BINARY_SIZE}
+    DEPENDS_TARGET "open62541-generator-types"
+)
 
 # stack protector needs to be disabled for the huge ns0 file, otherwise it may take many minutes to compile the file.
 if(NOT MSVC)
     set_source_files_properties(${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.c PROPERTIES COMPILE_FLAGS -fno-stack-protector)
 endif()
-
-# we need a custom target to avoid that the generator is called concurrently and thus overwriting files while the other thread is compiling
-add_custom_target(open62541-generator-namespace DEPENDS
-        ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.c
-        ${PROJECT_BINARY_DIR}/src_generated/ua_namespace0.h)
 
 #####################
 # Build the Library #

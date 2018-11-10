@@ -76,9 +76,12 @@ typedef struct UA_Notification {
 void UA_Notification_enqueue(UA_Server *server, UA_Subscription *sub,
                              UA_MonitoredItem *mon, UA_Notification *n);
 
-/* Delete the notification. Also removes it from the linked lists. */
-void UA_Notification_delete(UA_Subscription *sub, UA_MonitoredItem *mon,
-                            UA_Notification *n);
+/* Remove the notification from the MonitoredItem's queue and the Subscriptions
+ * global queue. Reduce the respective counters. */
+void UA_Notification_dequeue(UA_Server *server, UA_Notification *n);
+
+/* Delete the notification. Must be dequeued first. */
+void UA_Notification_delete(UA_Notification *n);
 
 typedef TAILQ_HEAD(NotificationQueue, UA_Notification) NotificationQueue;
 
@@ -99,7 +102,8 @@ struct UA_MonitoredItem {
     UA_UInt32 attributeId;
     UA_String indexRange;
     UA_Double samplingInterval; // [ms]
-    UA_UInt32 maxQueueSize;
+    UA_UInt32 maxQueueSize; /* The max number of enqueued notifications (not
+                               counting overflow events) */
     UA_Boolean discardOldest;
     // TODO: dataEncoding is hardcoded to UA binary
     union {
@@ -202,7 +206,7 @@ struct UA_Subscription {
 
     /* Retransmission Queue */
     ListOfNotificationMessages retransmissionQueue;
-    UA_UInt32 retransmissionQueueSize;
+    size_t retransmissionQueueSize;
 };
 
 UA_Subscription * UA_Subscription_new(UA_Session *session, UA_UInt32 subscriptionId);

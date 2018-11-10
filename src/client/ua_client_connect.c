@@ -9,7 +9,6 @@
  *    Copyright 2018 (c) Kalycito Infotech Private Limited
  */
 
-#include "ua_client.h"
 #include "ua_client_internal.h"
 #include "ua_transport_generated.h"
 #include "ua_transport_generated_handling.h"
@@ -558,6 +557,8 @@ UA_Client_connectInternal(UA_Client *client, const char *endpointUrl,
         return UA_STATUSCODE_GOOD;
     UA_ChannelSecurityToken_init(&client->channel.securityToken);
     client->channel.state = UA_SECURECHANNELSTATE_FRESH;
+    client->channel.sendSequenceNumber = 0;
+    client->requestId = 0;
 
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     client->connection =
@@ -675,12 +676,12 @@ cleanup:
 
 UA_StatusCode
 UA_Client_connect(UA_Client *client, const char *endpointUrl) {
-    return UA_Client_connectInternal(client, endpointUrl, UA_TRUE, UA_TRUE);
+    return UA_Client_connectInternal(client, endpointUrl, true, true);
 }
 
 UA_StatusCode
 UA_Client_connect_noSession(UA_Client *client, const char *endpointUrl) {
-    return UA_Client_connectInternal(client, endpointUrl, UA_TRUE, UA_FALSE);
+    return UA_Client_connectInternal(client, endpointUrl, true, false);
 }
 
 UA_StatusCode
