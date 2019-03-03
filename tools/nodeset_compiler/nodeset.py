@@ -1,4 +1,4 @@
-#!/usr/bin/env/python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 ###
@@ -19,17 +19,24 @@
 from __future__ import print_function
 import sys
 import xml.dom.minidom as dom
-from struct import pack as structpack
-from time import struct_time, strftime, strptime, mktime
 import logging
 import codecs
 import re
+from datatypes import *
+from nodes import *
+from opaque_type_mapping import opaque_type_mapping
+
+__all__ = ['NodeSet', 'getSubTypesOf']
 
 logger = logging.getLogger(__name__)
 
-from nodes import *
-from opaque_type_mapping import opaque_type_mapping
-import codecs
+if sys.version_info[0] >= 3:
+    # strings are already parsed to unicode
+    def unicode(s):
+        return s
+    string_types = str
+else:
+    string_types = basestring 
 
 ####################
 # Helper Functions #
@@ -65,12 +72,10 @@ def extractNamespaces(xmlfile):
     infile = codecs.open(xmlfile.name, encoding='utf-8')
     foundURIs = False
     nsline = ""
-    line = infile.readline()
     for line in infile:
         if "<namespaceuris>" in line.lower():
             foundURIs = True
         elif "</namespaceuris>" in line.lower():
-            foundURIs = False
             nsline = nsline + line
             break
         if foundURIs:
@@ -179,7 +184,7 @@ class NodeSet(object):
         if ndtype == 'referencetype':
             node = ReferenceTypeNode(xmlelement)
 
-        if node == None:
+        if node is None:
             return None
 
         node.modelUri = modelUri
@@ -223,23 +228,21 @@ class NodeSet(object):
 
 
         # Extract the modelUri
-        modelUri = None
         try:
             modelTag = nodeset.getElementsByTagName("Models")[0].getElementsByTagName("Model")[0]
             modelUri = modelTag.attributes["ModelUri"].nodeValue
-        except:
+        except Exception:
             # Ignore exception and try to use namespace array
             modelUri = None
 
 
         # Create the namespace mapping
         orig_namespaces = extractNamespaces(xmlfile)  # List of namespaces used in the xml file
-        if modelUri is None and len(orig_namespaces) > 0:
-            modelUri = orig_namespaces[0]
+        if modelUri is None and len(orig_namespaces) > 1:
+            modelUri = orig_namespaces[1]
 
         if modelUri is None:
             raise Exception(self, self.originXML + " does not define the nodeset URI in Models/Model/ModelUri or NamespaceUris array.")
-
 
         for ns in orig_namespaces:
             self.addNamespace(ns)
@@ -278,7 +281,6 @@ class NodeSet(object):
         of the target node is "DefaultBinary"
         """
         node = self.nodes[nodeId]
-        refId = NodeId()
         for ref in node.references:
             if ref.referenceType.ns == 0 and ref.referenceType.i == 38:
                 refNode = self.nodes[ref.target]
@@ -316,7 +318,7 @@ class NodeSet(object):
         return node
                 
     def getDataTypeNode(self, dataType):
-        if isinstance(dataType, six.string_types):
+        if isinstance(dataType, string_types):
             if not valueIsInternalType(dataType):
                 logger.error("Not a valid dataType string: " + dataType)
                 return None

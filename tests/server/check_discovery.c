@@ -10,6 +10,9 @@
 #include "thread_wrapper.h"
 
 #include <fcntl.h>
+#ifndef WIN32
+#include <sys/stat.h>
+#endif
 #include <check.h>
 
 #ifndef _WIN32
@@ -109,8 +112,9 @@ static void teardown_register(void) {
 }
 
 START_TEST(Server_register) {
-    UA_Client *clientRegister = UA_Client_new(UA_ClientConfig_default);
-    ck_assert(clientRegister != NULL);
+    UA_Client *clientRegister = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(clientRegister));
+
     UA_StatusCode retval = UA_Client_connect_noSession(clientRegister, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     retval = UA_Server_register_discovery(server_register, clientRegister , NULL);
@@ -121,8 +125,9 @@ START_TEST(Server_register) {
 END_TEST
 
 START_TEST(Server_unregister) {
-    UA_Client *clientRegister = UA_Client_new(UA_ClientConfig_default);
-    ck_assert(clientRegister != NULL);
+    UA_Client *clientRegister = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(clientRegister));
+
     UA_StatusCode retval = UA_Client_connect_noSession(clientRegister, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     retval = UA_Server_unregister_discovery(server_register, clientRegister);
@@ -150,8 +155,10 @@ START_TEST(Server_register_semaphore) {
     ck_assert_ptr_ne(fp, NULL);
     fclose(fp);
 #endif
-    UA_Client *clientRegister = UA_Client_new(UA_ClientConfig_default);
-    ck_assert(clientRegister != NULL);
+
+    UA_Client *clientRegister = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(clientRegister));
+
     UA_StatusCode retval = UA_Client_connect_noSession(clientRegister, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     retval = UA_Server_register_discovery(server_register, clientRegister, SEMAPHORE_PATH);
@@ -169,7 +176,10 @@ END_TEST
 
 START_TEST(Server_register_periodic) {
     ck_assert(clientRegisterRepeated == NULL);
-    clientRegisterRepeated = UA_Client_new(UA_ClientConfig_default);
+
+    clientRegisterRepeated = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(clientRegisterRepeated));
+
     ck_assert(clientRegisterRepeated != NULL);
     // periodic register every minute, first register immediately
     UA_StatusCode retval = UA_Server_addPeriodicServerRegisterCallback(server_register, clientRegisterRepeated, "opc.tcp://localhost:4840",
@@ -197,7 +207,8 @@ FindAndCheck(const UA_String expectedUris[], size_t expectedUrisSize,
              const UA_String expectedNames[],
              const char *filterUri,
              const char *filterLocale) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
 
     UA_ApplicationDescription* applicationDescriptionArray = NULL;
     size_t applicationDescriptionArraySize = 0;
@@ -263,11 +274,11 @@ static void
 FindOnNetworkAndCheck(UA_String expectedServerNames[], size_t expectedServerNamesSize,
                       const char *filterUri, const char *filterLocale,
                       const char** filterCapabilities, size_t filterCapabilitiesSize) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
 
     UA_ServerOnNetwork* serverOnNetwork = NULL;
     size_t serverOnNetworkSize = 0;
-
 
     size_t  serverCapabilityFilterSize = 0;
     UA_String *serverCapabilityFilter = NULL;
@@ -352,7 +363,8 @@ GetEndpoints(UA_Client *client, const UA_String* endpointUrl,
 static void
 GetEndpointsAndCheck(const char* discoveryUrl, const char* filterTransportProfileUri,
                      const UA_String expectedEndpointUrls[], size_t expectedEndpointUrlsSize) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
 
     ck_assert_uint_eq(UA_Client_connect(client, discoveryUrl), UA_STATUSCODE_GOOD);
 

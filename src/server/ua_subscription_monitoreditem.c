@@ -162,7 +162,7 @@ UA_MonitoredItem_delete(UA_Server *server, UA_MonitoredItem *monitoredItem) {
         UA_MonitoredItem_unregisterSampleCallback(server, monitoredItem);
     } else if (monitoredItem->monitoredItemType != UA_MONITOREDITEMTYPE_EVENTNOTIFY) {
         /* TODO: Access val data.event */
-        UA_LOG_ERROR(server->config.logger, UA_LOGCATEGORY_SERVER,
+        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
                      "MonitoredItemTypes other than ChangeNotify or EventNotify "
                      "are not supported yet");
     }
@@ -367,18 +367,18 @@ UA_MonitoredItem_registerSampleCallback(UA_Server *server, UA_MonitoredItem *mon
 
     UA_StatusCode retval =
         UA_Server_addRepeatedCallback(server, (UA_ServerCallback)UA_MonitoredItem_sampleCallback,
-                                      mon, (UA_UInt32)mon->samplingInterval, &mon->sampleCallbackId);
+                                      mon, mon->samplingInterval, &mon->sampleCallbackId);
     if(retval == UA_STATUSCODE_GOOD)
         mon->sampleCallbackIsRegistered = true;
     return retval;
 }
 
-UA_StatusCode
+void
 UA_MonitoredItem_unregisterSampleCallback(UA_Server *server, UA_MonitoredItem *mon) {
     if(!mon->sampleCallbackIsRegistered)
-        return UA_STATUSCODE_GOOD;
+        return;
+    UA_Server_removeRepeatedCallback(server, mon->sampleCallbackId);
     mon->sampleCallbackIsRegistered = false;
-    return UA_Server_removeRepeatedCallback(server, mon->sampleCallbackId);
 }
 
 #endif /* UA_ENABLE_SUBSCRIPTIONS */

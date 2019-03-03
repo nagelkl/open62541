@@ -17,8 +17,9 @@
 
 static UA_Server *server;
 static UA_ServerConfig *config;
-static UA_Boolean *running;
+static UA_Boolean running;
 static THREAD_HANDLE server_thread;
+static MUTEX_HANDLE serverMutex;
 
 UA_Client *client;
 
@@ -128,7 +129,6 @@ setupSubscription(void) {
     UA_CreateSubscriptionResponse response =
         UA_Client_Subscriptions_create(client, request, NULL, NULL, NULL);
     subscriptionId = response.subscriptionId;
-
 }
 
 static void
@@ -147,16 +147,36 @@ removeSubscription(void) {
     UA_DeleteSubscriptionsResponse_deleteMembers(&deleteSubscriptionsResponse);
 }
 
+static void serverMutexLock(void) {
+    if (!(MUTEX_LOCK(serverMutex))) {
+        fprintf(stderr, "Mutex cannot be locked.\n");
+        exit(1);
+    }
+}
+
+static void serverMutexUnlock(void) {
+    if (!(MUTEX_UNLOCK(serverMutex))) {
+        fprintf(stderr, "Mutex cannot be unlocked.\n");
+        exit(1);
+    }
+}
+
 THREAD_CALLBACK(serverloop) {
-    while (*running)
-        UA_Server_run_iterate(server, true);
+    while (running) {
+        serverMutexLock();
+        UA_Server_run_iterate(server, false);
+        serverMutexUnlock();
+    }
     return 0;
 }
 
 static void
 setup(void) {
-    running = UA_Boolean_new();
-    *running = true;
+    if (!MUTEX_INIT(serverMutex)) {
+        fprintf(stderr, "Server mutex was not created correctly.");
+        exit(1);
+    }
+    running = true;
     config = UA_ServerConfig_new_default();
     config->maxPublishReqPerSession = 5;
     server = UA_Server_new(config);
@@ -165,31 +185,51 @@ setup(void) {
     setupSelectClauses();
     THREAD_CREATE(server_thread, serverloop);
 
-    client = UA_Client_new(UA_ClientConfig_default);
+    client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
-    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+    if(retval != UA_STATUSCODE_GOOD) {
+        fprintf(stderr, "Client can not connect to opc.tcp://localhost:4840. %s",
+                UA_StatusCode_name(retval));
+        exit(1);
+    }
     setupSubscription();
+    UA_comboSleep((UA_UInt32) publishingInterval + 100);
 }
 
 static void
 teardown(void) {
-    removeSubscription();
-    *running = false;
+    running = false;
     THREAD_JOIN(server_thread);
+    removeSubscription();
     UA_Server_run_shutdown(server);
-    UA_Boolean_delete(running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
     UA_Array_delete(selectClauses, nSelectClauses, &UA_TYPES[UA_TYPES_SIMPLEATTRIBUTEOPERAND]);
 
     UA_Client_disconnect(client);
     UA_Client_delete(client);
+    if (!MUTEX_DESTROY(serverMutex)) {
+        fprintf(stderr, "Server mutex was not destroyed correctly.");
+        exit(1);
+    }
+}
+
+static UA_StatusCode triggerEventLocked(const UA_NodeId eventNodeId, const UA_NodeId origin,
+                                        UA_ByteString *outEventId, const UA_Boolean deleteEventNode) {
+    serverMutexLock();
+    UA_StatusCode retval = UA_Server_triggerEvent(server, eventNodeId, origin, outEventId, deleteEventNode);
+    serverMutexUnlock();
+    return retval;
 }
 
 static UA_StatusCode
 eventSetup(UA_NodeId *eventNodeId) {
     UA_StatusCode retval;
+    serverMutexLock();
     retval = UA_Server_createEvent(server, eventType, eventNodeId);
+    serverMutexUnlock();
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     // add a severity to the event
     UA_Variant value;
@@ -204,19 +244,27 @@ eventSetup(UA_NodeId *eventNodeId) {
     bp.relativePath.elementsSize = 1;
     bp.relativePath.elements = &rpe;
     rpe.targetName = UA_QUALIFIEDNAME(0, "Severity");
+    serverMutexLock();
     UA_BrowsePathResult bpr = UA_Server_translateBrowsePathToNodeIds(server, &bp);
+    serverMutexUnlock();
     // number with no special meaning
     UA_UInt16 eventSeverity = 1000;
     UA_Variant_setScalar(&value, &eventSeverity, &UA_TYPES[UA_TYPES_UINT16]);
+    serverMutexLock();
     UA_Server_writeValue(server, bpr.targets[0].targetId.nodeId, value);
+    serverMutexUnlock();
     UA_BrowsePathResult_deleteMembers(&bpr);
 
     //add a message to the event
     rpe.targetName = UA_QUALIFIEDNAME(0, "Message");
+    serverMutexLock();
     bpr = UA_Server_translateBrowsePathToNodeIds(server, &bp);
+    serverMutexUnlock();
     UA_LocalizedText message = UA_LOCALIZEDTEXT("en-US", "Generated Event");
     UA_Variant_setScalar(&value, &message, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
+    serverMutexLock();
     UA_Server_writeValue(server, bpr.targets[0].targetId.nodeId, value);
+    serverMutexUnlock();
     UA_BrowsePathResult_deleteMembers(&bpr);
 
     return retval;
@@ -255,13 +303,14 @@ START_TEST(generateEvents) {
     // add a monitored item
     UA_MonitoredItemCreateResult createResult = addMonitoredItem(handler_events_simple);
     ck_assert_uint_eq(createResult.statusCode, UA_STATUSCODE_GOOD);
+    monitoredItemId = createResult.monitoredItemId;
     // trigger the event
-    retval = UA_Server_triggerEvent(server, eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_TRUE);
+    retval = triggerEventLocked(eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_TRUE);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
     // let the client fetch the event and check if the correct values were received
     notificationReceived = false;
-    UA_fakeSleep((UA_UInt32) publishingInterval + 100);
+    UA_comboSleep((UA_UInt32) publishingInterval + 100);
     retval = UA_Client_run_iterate(client, 0);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(notificationReceived, true);
@@ -277,8 +326,10 @@ START_TEST(generateEvents) {
     UA_DeleteMonitoredItemsResponse deleteResponse =
         UA_Client_MonitoredItems_delete(client, deleteRequest);
 
+    UA_realSleep((UA_UInt32)publishingInterval + 100);
     ck_assert_uint_eq(deleteResponse.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(deleteResponse.resultsSize, 1);
+    ck_assert_uint_eq(*(deleteResponse.results), UA_STATUSCODE_GOOD);
 
     UA_DeleteMonitoredItemsResponse_deleteMembers(&deleteResponse);
 } END_TEST
@@ -338,14 +389,15 @@ START_TEST(uppropagation) {
     //add a monitored item
     UA_MonitoredItemCreateResult createResult = addMonitoredItem(handler_events_propagate);
     ck_assert_uint_eq(createResult.statusCode, UA_STATUSCODE_GOOD);
+    monitoredItemId = createResult.monitoredItemId;
     // trigger the event on a child of server, using namespaces in this case (no reason in particular)
-    retval = UA_Server_triggerEvent(server, eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_NAMESPACES), NULL,
-                                    UA_TRUE);
+    retval = triggerEventLocked(eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_NAMESPACES), NULL,
+                                UA_TRUE);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
     // let the client fetch the event and check if the correct values were received
     notificationReceived = false;
-    UA_fakeSleep((UA_UInt32) publishingInterval + 100);
+    UA_comboSleep((UA_UInt32) publishingInterval + 100);
     retval = UA_Client_run_iterate(client, 0);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(notificationReceived, true);
@@ -363,6 +415,7 @@ START_TEST(uppropagation) {
 
     ck_assert_uint_eq(deleteResponse.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(deleteResponse.resultsSize, 1);
+    ck_assert_uint_eq(*(deleteResponse.results), UA_STATUSCODE_GOOD);
 
     UA_DeleteMonitoredItemsResponse_deleteMembers(&deleteResponse);
 } END_TEST
@@ -390,20 +443,21 @@ START_TEST(eventOverflow) {
     // add a monitored item
     UA_MonitoredItemCreateResult createResult = addMonitoredItem(handler_events_overflow);
     ck_assert_uint_eq(createResult.statusCode, UA_STATUSCODE_GOOD);
+    monitoredItemId = createResult.monitoredItemId;
 
     // trigger first event
     UA_NodeId eventNodeId;
     UA_StatusCode retval = eventSetup(&eventNodeId);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-    retval = UA_Server_triggerEvent(server, eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_FALSE);
+    retval = triggerEventLocked(eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_FALSE);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-    retval = UA_Server_triggerEvent(server, eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_TRUE);
+    retval = triggerEventLocked(eventNodeId, UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_TRUE);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
     // fetch the events, ensure both the overflow and the original event are received
     notificationReceived = false;
     overflowNotificationReceived = true;
-    UA_fakeSleep((UA_UInt32) publishingInterval + 100);
+    UA_comboSleep((UA_UInt32) publishingInterval + 100);
     retval = UA_Client_run_iterate(client, 0);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(notificationReceived, true);
@@ -422,12 +476,13 @@ START_TEST(eventOverflow) {
 
     ck_assert_uint_eq(deleteResponse.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(deleteResponse.resultsSize, 1);
+    ck_assert_uint_eq(*(deleteResponse.results), UA_STATUSCODE_GOOD);
 
     UA_DeleteMonitoredItemsResponse_deleteMembers(&deleteResponse);
 } END_TEST
 
 START_TEST(multipleMonitoredItemsOneNode) {
-    UA_UInt32 monitoredItemIdAr[3] = {0, 1, 2};
+    UA_UInt32 monitoredItemIdAr[3];
 
     /* set up monitored items */
     UA_MonitoredItemCreateRequest item;
@@ -450,8 +505,9 @@ START_TEST(multipleMonitoredItemsOneNode) {
     for(size_t i = 0; i < 3; i++) {
         UA_MonitoredItemCreateResult result =
             UA_Client_MonitoredItems_createEvent(client, subscriptionId, UA_TIMESTAMPSTORETURN_BOTH,
-                                                 item, &monitoredItemIdAr[i], handler_events_simple, NULL);
+                                                 item, NULL, handler_events_simple, NULL);
         ck_assert_uint_eq(result.statusCode, UA_STATUSCODE_GOOD);
+        monitoredItemIdAr[i] = result.monitoredItemId;
     }
 
     // delete the three monitored items after another
@@ -462,14 +518,13 @@ START_TEST(multipleMonitoredItemsOneNode) {
     UA_DeleteMonitoredItemsResponse deleteResponse;
 
     for(size_t i = 0; i < 3; i++) {
-        deleteRequest.monitoredItemIds = &monitoredItemIdAr[1];
+        deleteRequest.monitoredItemIds = &monitoredItemIdAr[i];
         deleteResponse = UA_Client_MonitoredItems_delete(client, deleteRequest);
 
         ck_assert_uint_eq(deleteResponse.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
         ck_assert_uint_eq(deleteResponse.resultsSize, 1);
+        ck_assert_uint_eq(*(deleteResponse.results), UA_STATUSCODE_GOOD);
         UA_DeleteMonitoredItemsResponse_deleteMembers(&deleteResponse);
-
-        UA_fakeSleep((UA_UInt32) publishingInterval + 100);
     }
 } END_TEST
 
@@ -477,18 +532,18 @@ START_TEST(eventStressing) {
     // add a monitored item
     UA_MonitoredItemCreateResult createResult = addMonitoredItem(handler_events_overflow);
     ck_assert_uint_eq(createResult.statusCode, UA_STATUSCODE_GOOD);
+    monitoredItemId = createResult.monitoredItemId;
 
     // trigger a large amount of events, ensure the server doesnt crash because of it
     UA_NodeId eventNodeId;
     UA_StatusCode retval = eventSetup(&eventNodeId);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-    for(size_t i = 0; i < 50; i++) {
+    for(size_t i = 0; i < 20; i++) {
         for(size_t j = 0; j < 5; j++) {
-            retval = UA_Server_triggerEvent(server, eventNodeId,
+            retval = triggerEventLocked(eventNodeId,
                                             UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER), NULL, UA_FALSE);
             ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
         }
-        UA_fakeSleep((UA_UInt32)publishingInterval + 100);
         retval = UA_Client_run_iterate(client, 0);
         ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     }
@@ -505,6 +560,7 @@ START_TEST(eventStressing) {
 
     ck_assert_uint_eq(deleteResponse.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
     ck_assert_uint_eq(deleteResponse.resultsSize, 1);
+    ck_assert_uint_eq(*(deleteResponse.results), UA_STATUSCODE_GOOD);
 
     UA_DeleteMonitoredItemsResponse_deleteMembers(&deleteResponse);
 } END_TEST
@@ -516,7 +572,7 @@ static Suite *testSuite_Client(void) {
     Suite *s = suite_create("Server Subscription Events");
     TCase *tc_server = tcase_create("Server Subscription Events");
 #ifdef UA_ENABLE_SUBSCRIPTIONS_EVENTS
-    tcase_add_checked_fixture(tc_server, setup, teardown);
+    tcase_add_unchecked_fixture(tc_server, setup, teardown);
     tcase_add_test(tc_server, generateEvents);
     tcase_add_test(tc_server, uppropagation);
     tcase_add_test(tc_server, eventOverflow);

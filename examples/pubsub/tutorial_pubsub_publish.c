@@ -24,9 +24,13 @@
  * ``tutorial_pubsub_connection.c``.
  */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+#include <ua_network_pubsub_udp.h>
+#include <ua_network_pubsub_ethernet.h>
+
 #include <signal.h>
-#include <stdio.h>
 
 UA_NodeId connectionIdent, publishedDataSetIdent, writerGroupIdent;
 
@@ -163,7 +167,7 @@ static int run(UA_String *transportProfile,
         (UA_PubSubTransportLayer *) UA_calloc(2, sizeof(UA_PubSubTransportLayer));
     if(!config->pubsubTransportLayers) {
         UA_ServerConfig_delete(config);
-        return -1;
+        return EXIT_FAILURE;
     }
     config->pubsubTransportLayers[0] = UA_PubSubTransportLayerUDPMP();
     config->pubsubTransportLayersSize++;
@@ -182,7 +186,7 @@ static int run(UA_String *transportProfile,
     retval |= UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 static void
@@ -199,7 +203,7 @@ int main(int argc, char **argv) {
     if (argc > 1) {
         if (strcmp(argv[1], "-h") == 0) {
             usage(argv[0]);
-            return 0;
+            return EXIT_SUCCESS;
         } else if (strncmp(argv[1], "opc.udp://", 10) == 0) {
             networkAddressUrl.url = UA_STRING(argv[1]);
         } else if (strncmp(argv[1], "opc.eth://", 10) == 0) {
@@ -207,13 +211,13 @@ int main(int argc, char **argv) {
                 UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp");
             if (argc < 3) {
                 printf("Error: UADP/ETH needs an interface name\n");
-                return 1;
+                return EXIT_FAILURE;
             }
             networkAddressUrl.networkInterface = UA_STRING(argv[2]);
             networkAddressUrl.url = UA_STRING(argv[1]);
         } else {
             printf("Error: unknown URI\n");
-            return 1;
+            return EXIT_FAILURE;
         }
     }
 

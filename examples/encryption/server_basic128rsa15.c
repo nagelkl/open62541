@@ -1,9 +1,15 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+#include <ua_securitypolicies.h>
+#include <ua_client_highlevel.h>
 #include "common.h"
+
 #include <signal.h>
+#include <stdlib.h>
 
 UA_Boolean running = true;
 static void stopHandler(int sig) {
@@ -20,7 +26,7 @@ int main(int argc, char* argv[]) {
                      "Missing arguments. Arguments are "
                      "<server-certificate.der> <private-key.der> "
                      "[<trustlist1.crl>, ...]");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     /* Load certificate and private key */
@@ -43,20 +49,20 @@ int main(int argc, char* argv[]) {
         UA_ServerConfig_new_basic128rsa15(4840, &certificate, &privateKey,
                                           trustList, trustListSize,
                                           revocationList, revocationListSize);
-    UA_ByteString_deleteMembers(&certificate);
-    UA_ByteString_deleteMembers(&privateKey);
+    UA_ByteString_clear(&certificate);
+    UA_ByteString_clear(&privateKey);
     for(size_t i = 0; i < trustListSize; i++)
-        UA_ByteString_deleteMembers(&trustList[i]);
+        UA_ByteString_clear(&trustList[i]);
 
     if(!config) {
         UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                      "Could not create the server config");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     UA_Server *server = UA_Server_new(config);
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

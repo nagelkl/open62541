@@ -22,7 +22,7 @@ Building with CMake on Ubuntu or Debian
 
 .. code-block:: bash
 
-   sudo apt-get install git build-essential gcc pkg-config cmake python python-six
+   sudo apt-get install git build-essential gcc pkg-config cmake python
 
    # enable additional features
    sudo apt-get install cmake-curses-gui # for the ccmake graphical interface
@@ -54,7 +54,6 @@ with MinGW, just replace the compiler selection in the call to CMake.
 - Download and install
 
   - Python 2.7.x (Python 3.x works as well): https://python.org/downloads
-  - Install python-six with the pip package manager (``pip install six``)
   - CMake: http://www.cmake.org/cmake/resources/software.html
   - Microsoft Visual Studio: https://www.visualstudio.com/products/visual-studio-community-vs
 
@@ -85,7 +84,6 @@ Building on OS X
 .. code-block:: bash
 
    brew install cmake
-   pip install six # python 2/3 compatibility workarounds
    pip install sphinx # for documentation generation
    pip install sphinx_rtd_theme # documentation style
    brew install graphviz # for graphics in the documentation
@@ -118,6 +116,9 @@ The procedure below works on OpenBSD 5.8 with gcc version 4.8.4, cmake version 3
    cd build
    cmake ..
    make
+
+
+.. _build_options:
 
 Build Options
 -------------
@@ -183,7 +184,7 @@ Detailed SDK Features
    Enable dynamic addition and removal of nodes at runtime
 
 **UA_ENABLE_AMALGAMATION**
-   Compile a single-file release into the files :file:`open62541.c` and :file:`open62541.h`
+   Compile a single-file release into the files :file:`open62541.c` and :file:`open62541.h`. Not receommended for installation.
 
 **UA_ENABLE_MULTITHREADING (EXPERIMENTAL)**
    Enable multi-threading support. Work is distributed to a number of worker threads.
@@ -230,8 +231,6 @@ be visible in the cmake GUIs.
 **UA_ENABLE_FULL_NS0**
    Use the full NS0 instead of a minimal Namespace 0 nodeset
    ``UA_FILE_NS0`` is used to specify the file for NS0 generation from namespace0 folder. Default value is ``Opc.Ua.NodeSet2.xml``
-**UA_ENABLE_NONSTANDARD_UDP**
-   Enable udp extension
 
 Debug Build Options
 ^^^^^^^^^^^^^^^^^^^

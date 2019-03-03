@@ -5,9 +5,18 @@
 #define _CRT_SECURE_NO_WARNINGS /* disable fopen deprication warning in msvs */
 #endif
 
-#include "open62541.h"
-#include "common.h"
+#ifdef UA_ENABLE_AMALGAMATION
+# include <open62541.h>
+#else
+# include <ua_server.h>
+# include <ua_config_default.h>
+# include <ua_log_stdout.h>
+#endif
+
+# include "common.h"
+
 #include <signal.h>
+#include <stdlib.h>
 
 /* This server is configured to the Compliance Testing Tools (CTT) against. The
  * corresponding CTT configuration is available at
@@ -67,7 +76,7 @@ helloWorld(UA_Server *server,
     memcpy(greet.data, hello.data, hello.length);
     memcpy(greet.data + hello.length, name->data, name->length);
     UA_Variant_setScalarCopy(output, &greet, &UA_TYPES[UA_TYPES_STRING]);
-    UA_String_deleteMembers(&greet);
+    UA_String_clear(&greet);
     return UA_STATUSCODE_GOOD;
 }
 
@@ -150,7 +159,8 @@ setInformationModel(UA_Server *server) {
     v_attr.dataType = UA_TYPES[UA_TYPES_DATETIME].typeId;
     v_attr.valueRank = UA_VALUERANK_SCALAR;
     const UA_QualifiedName dateName = UA_QUALIFIEDNAME(1, "current time");
-    UA_Server_addDataSourceVariableNode(server, UA_NODEID_NULL, UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
+    UA_Server_addDataSourceVariableNode(server, UA_NODEID_NUMERIC(1, 2345),
+                                        UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
                                         UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES), dateName,
                                         baseDataVariableType, v_attr, dateDataSource, NULL, NULL);
 
@@ -264,7 +274,7 @@ setInformationModel(UA_Server *server) {
         UA_Server_addVariableNode(server, UA_NODEID_NUMERIC(1, ++id),
                                   UA_NODEID_NUMERIC(1, SCALARID), UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
                                   qualifiedName, baseDataVariableType, attr, NULL, NULL);
-        UA_Variant_deleteMembers(&attr.value);
+        UA_Variant_clear(&attr.value);
 
         /* add an array node for every built-in type */
         UA_UInt32 arrayDims = 0;
@@ -275,7 +285,7 @@ setInformationModel(UA_Server *server) {
         UA_Server_addVariableNode(server, UA_NODEID_NUMERIC(1, ++id), UA_NODEID_NUMERIC(1, ARRAYID),
                                   UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES), qualifiedName,
                                   baseDataVariableType, attr, NULL, NULL);
-        UA_Variant_deleteMembers(&attr.value);
+        UA_Variant_clear(&attr.value);
 
         /* add an matrix node for every built-in type */
         attr.valueRank = UA_VALUERANK_TWO_DIMENSIONS;
@@ -292,12 +302,33 @@ setInformationModel(UA_Server *server) {
         UA_Server_addVariableNode(server, UA_NODEID_NUMERIC(1, ++id), UA_NODEID_NUMERIC(1, MATRIXID),
                                   UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES), qualifiedName,
                                   baseDataVariableType, attr, NULL, NULL);
-        UA_Variant_deleteMembers(&attr.value);
+        UA_Variant_clear(&attr.value);
 #ifdef UA_ENABLE_TYPENAMES
-        UA_LocalizedText_deleteMembers(&attr.displayName);
-        UA_QualifiedName_deleteMembers(&qualifiedName);
+        UA_LocalizedText_clear(&attr.displayName);
+        UA_QualifiedName_clear(&qualifiedName);
 #endif
     }
+
+    /* Add Integer and UInteger variables */
+    UA_VariableAttributes iattr = UA_VariableAttributes_default;
+    iattr.dataType = UA_NODEID_NUMERIC(0, UA_NS0ID_INTEGER);
+    iattr.displayName = UA_LOCALIZEDTEXT("en-US", "Integer");
+    iattr.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
+    iattr.writeMask = UA_WRITEMASK_DISPLAYNAME | UA_WRITEMASK_DESCRIPTION;
+    iattr.userWriteMask = UA_WRITEMASK_DISPLAYNAME | UA_WRITEMASK_DESCRIPTION;
+    iattr.valueRank = UA_VALUERANK_SCALAR;
+    UA_QualifiedName iQualifiedName = UA_QUALIFIEDNAME(1, "integer");
+    UA_Server_addVariableNode(server, UA_NODEID_STRING(1, "integer"),
+                              UA_NODEID_NUMERIC(1, SCALARID), UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
+                              iQualifiedName, baseDataVariableType, iattr, NULL, NULL);
+
+    iattr.dataType = UA_NODEID_NUMERIC(0, UA_NS0ID_UINTEGER);
+    iattr.displayName = UA_LOCALIZEDTEXT("en-US", "UInteger");
+    UA_QualifiedName uQualifiedName = UA_QUALIFIEDNAME(1, "uinteger");
+    UA_Server_addVariableNode(server, UA_NODEID_STRING(1, "uinteger"),
+                              UA_NODEID_NUMERIC(1, SCALARID), UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
+                              uQualifiedName, baseDataVariableType, iattr, NULL, NULL);
+    UA_Variant_clear(&iattr.value);
 
     /* Hierarchy of depth 10 for CTT testing with forward and inverse references */
     /* Enter node "depth 9" in CTT configuration - Project->Settings->Server
@@ -429,13 +460,13 @@ int main(int argc, char **argv) {
         if(certificate.length == 0) {
             UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                            "Unable to load file %s.", argv[1]);
-            return 1;
+            return EXIT_FAILURE;
         }
         UA_ByteString privateKey = loadFile(argv[2]);
         if(privateKey.length == 0) {
             UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                            "Unable to load file %s.", argv[2]);
-            return 1;
+            return EXIT_FAILURE;
         }
 
         /* Load the trustlist */
@@ -453,10 +484,10 @@ int main(int argc, char **argv) {
         config = UA_ServerConfig_new_allSecurityPolicies(4840, &certificate, &privateKey,
                                                          trustList, trustListSize,
                                                          revocationList, revocationListSize);
-        UA_ByteString_deleteMembers(&certificate);
-        UA_ByteString_deleteMembers(&privateKey);
+        UA_ByteString_clear(&certificate);
+        UA_ByteString_clear(&privateKey);
         for(size_t i = 0; i < trustListSize; i++)
-            UA_ByteString_deleteMembers(&trustList[i]);
+            UA_ByteString_clear(&trustList[i]);
     }
 #else
     UA_ByteString certificate = UA_BYTESTRING_NULL;
@@ -467,13 +498,13 @@ int main(int argc, char **argv) {
         certificate = loadFile(argv[1]);
     }
     config = UA_ServerConfig_new_minimal(4840, &certificate);
-    UA_ByteString_deleteMembers(&certificate);
+    UA_ByteString_clear(&certificate);
 #endif
 
     if(!config) {
         UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                      "Could not create the server config");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     /* Override with a custom access control policy */
@@ -484,7 +515,7 @@ int main(int argc, char **argv) {
 
     UA_Server *server = UA_Server_new(config);
     if(server == NULL)
-        return 1;
+        return EXIT_FAILURE;
 
     setInformationModel(server);
 
@@ -492,5 +523,5 @@ int main(int argc, char **argv) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

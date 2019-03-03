@@ -19,8 +19,13 @@
  * context pointer.
  */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+#include <ua_client_subscriptions.h>
+
 #include <signal.h>
+#include <stdlib.h>
 
 static void
 dataChangeNotificationCallback(UA_Server *server, UA_UInt32 monitoredItemId,
@@ -61,5 +66,5 @@ int main(void) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -9,12 +9,14 @@
 #ifndef PLUGINS_ARCH_WEC7_UA_ARCHITECTURE_H_
 #define PLUGINS_ARCH_WEC7_UA_ARCHITECTURE_H_
 
+#include "ua_architecture_base.h"
+
 #ifndef _BSD_SOURCE
 # define _BSD_SOURCE
 #endif
 
 /* Disable some security warnings on MSVC */
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
 # define _CRT_SECURE_NO_WARNINGS
 #endif
 
@@ -55,10 +57,6 @@ char *strerror(int errnum);
 #define OPTVAL_TYPE char
 #ifndef UA_sleep_ms
 # define UA_sleep_ms(X) Sleep(X)
-#else /* UA_sleep_ms */
-/* With this one can define its own UA_sleep_ms using a preprocessor define.
-E.g. see unit tests. */
-void UA_sleep_ms(size_t ms);
 #endif
 
 // Windows does not support ansi colors
@@ -111,10 +109,18 @@ void UA_sleep_ms(size_t ms);
 # undef maxStringLength
 #endif
 
+#ifndef UA_free
 #define UA_free free
+#endif
+#ifndef UA_malloc
 #define UA_malloc malloc
+#endif
+#ifndef UA_calloc
 #define UA_calloc calloc
+#endif
+#ifndef UA_realloc
 #define UA_realloc realloc
+#endif
 
 #define UA_snprintf(source, size, string, ...) _snprintf_s(source, size, _TRUNCATE, string, __VA_ARGS__)
 
@@ -130,10 +136,10 @@ void UA_sleep_ms(size_t ms);
 }
 #define UA_LOG_SOCKET_ERRNO_GAI_WRAP UA_LOG_SOCKET_ERRNO_WRAP
 
-#include "../ua_architecture_functions.h"
+#include "ua_architecture_functions.h"
 
 /* Fix redefinition of SLIST_ENTRY on mingw winnt.h */
-#ifdef SLIST_ENTRY
+#if !defined(_SYS_QUEUE_H_) && defined(SLIST_ENTRY)
 # undef SLIST_ENTRY
 #endif
 

@@ -1,9 +1,13 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_log_stdout.h>
+#include <ua_config_default.h>
 #include "custom_datatype.h"
+
 #include <signal.h>
+#include <stdlib.h>
 
 UA_Boolean running = true;
 
@@ -82,6 +86,8 @@ int main(void) {
     UA_Server_run(server, &running);
 
     UA_Server_delete(server);
+    UA_free(members);
+    UA_free(types);
     UA_ServerConfig_delete(config);
-    return 0;
+    return EXIT_SUCCESS;
 }

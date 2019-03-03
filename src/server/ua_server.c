@@ -1,4 +1,3 @@
-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
@@ -156,58 +155,7 @@ void UA_Server_delete(UA_Server *server) {
 #endif
 
 #ifdef UA_ENABLE_DISCOVERY
-    registeredServer_list_entry *rs, *rs_tmp;
-    LIST_FOREACH_SAFE(rs, &server->registeredServers, pointers, rs_tmp) {
-        LIST_REMOVE(rs, pointers);
-        UA_RegisteredServer_deleteMembers(&rs->registeredServer);
-        UA_free(rs);
-    }
-    periodicServerRegisterCallback_entry *ps, *ps_tmp;
-    LIST_FOREACH_SAFE(ps, &server->periodicServerRegisterCallbacks, pointers, ps_tmp) {
-        LIST_REMOVE(ps, pointers);
-        UA_free(ps->callback);
-        UA_free(ps);
-    }
-
-# ifdef UA_ENABLE_DISCOVERY_MULTICAST
-    if(server->config.applicationDescription.applicationType == UA_APPLICATIONTYPE_DISCOVERYSERVER)
-        destroyMulticastDiscoveryServer(server);
-
-    serverOnNetwork_list_entry *son, *son_tmp;
-    LIST_FOREACH_SAFE(son, &server->serverOnNetwork, pointers, son_tmp) {
-        LIST_REMOVE(son, pointers);
-        UA_ServerOnNetwork_deleteMembers(&son->serverOnNetwork);
-        if(son->pathTmp)
-            UA_free(son->pathTmp);
-        UA_free(son);
-    }
-
-    for(size_t i = 0; i < SERVER_ON_NETWORK_HASH_PRIME; i++) {
-        serverOnNetwork_hash_entry* currHash = server->serverOnNetworkHash[i];
-        while(currHash) {
-            serverOnNetwork_hash_entry* nextHash = currHash->next;
-            UA_free(currHash);
-            currHash = nextHash;
-        }
-    }
-
-    mdnsHostnameToIp_list_entry *mhi, *mhi_tmp;
-    LIST_FOREACH_SAFE(mhi, &server->mdnsHostnameToIp, pointers, mhi_tmp) {
-        LIST_REMOVE(mhi, pointers);
-        UA_String_deleteMembers(&mhi->mdnsHostname);
-        UA_free(mhi);
-    }
-
-    for(size_t i = 0; i < MDNS_HOSTNAME_TO_IP_HASH_PRIME; i++) {
-        mdnsHostnameToIp_hash_entry* currHash = server->mdnsHostnameToIpHash[i];
-        while(currHash) {
-            mdnsHostnameToIp_hash_entry* nextHash = currHash->next;
-            UA_free(currHash);
-            currHash = nextHash;
-        }
-    }
-# endif
-
+    UA_DiscoveryManager_deleteMembers(&server->discoveryManager, server);
 #endif
 
     /* Clean up the Admin Session */
@@ -282,53 +230,26 @@ UA_Server_new(const UA_ServerConfig *config) {
     UA_SecureChannelManager_init(&server->secureChannelManager, server);
     UA_SessionManager_init(&server->sessionManager, server);
 
-    /* Add a regular callback for cleanup and maintenance */
+    /* Add a regular callback for cleanup and maintenance. With a 10s interval. */
     UA_Server_addRepeatedCallback(server, (UA_ServerCallback)UA_Server_cleanup, NULL,
-                                  10000, NULL);
+                                  10000.0, NULL);
 
-    /* Initialized discovery database */
+    /* Initialized discovery */
 #ifdef UA_ENABLE_DISCOVERY
-    LIST_INIT(&server->registeredServers);
-    server->registeredServersSize = 0;
-    LIST_INIT(&server->periodicServerRegisterCallbacks);
-    server->registerServerCallback = NULL;
-    server->registerServerCallbackData = NULL;
-#endif
-
-    /* Initialize multicast discovery */
-#if defined(UA_ENABLE_DISCOVERY) && defined(UA_ENABLE_DISCOVERY_MULTICAST)
-    server->mdnsDaemon = NULL;
-    server->mdnsSocket = UA_INVALID_SOCKET;
-    server->mdnsMainSrvAdded = false;
-    if(server->config.applicationDescription.applicationType == UA_APPLICATIONTYPE_DISCOVERYSERVER)
-        initMulticastDiscoveryServer(server);
-
-    LIST_INIT(&server->serverOnNetwork);
-    server->serverOnNetworkSize = 0;
-    server->serverOnNetworkRecordIdCounter = 0;
-    server->serverOnNetworkRecordIdLastReset = UA_DateTime_now();
-    memset(server->serverOnNetworkHash, 0,
-           sizeof(struct serverOnNetwork_hash_entry*) * SERVER_ON_NETWORK_HASH_PRIME);
-
-
-    LIST_INIT(&server->mdnsHostnameToIp);
-    memset(server->mdnsHostnameToIpHash, 0,
-           sizeof(struct mdnsHostnameToIp_hash_entry*) * MDNS_HOSTNAME_TO_IP_HASH_PRIME);
-
-    server->serverOnNetworkCallback = NULL;
-    server->serverOnNetworkCallbackData = NULL;
+    UA_DiscoveryManager_init(&server->discoveryManager, server);
 #endif
 
     /* Initialize namespace 0*/
     UA_StatusCode retVal = UA_Server_initNS0(server);
     if(retVal != UA_STATUSCODE_GOOD) {
-        UA_LOG_ERROR(config->logger, UA_LOGCATEGORY_SERVER,
+        UA_LOG_ERROR(&config->logger, UA_LOGCATEGORY_SERVER,
                      "Namespace 0 could not be bootstrapped with error %s. "
                      "Shutting down the server.",
                      UA_StatusCode_name(retVal));
         UA_Server_delete(server);
         return NULL;
     }
+
     /* Build PubSub information model */
 #ifdef UA_ENABLE_PUBSUB_INFORMATIONMODEL
     UA_Server_initPubSubNS0(server);
@@ -337,28 +258,37 @@ UA_Server_new(const UA_ServerConfig *config) {
     return server;
 }
 
-/*****************/
-/* Repeated Jobs */
-/*****************/
+/*******************/
+/* Timed Callbacks */
+/*******************/
+
+UA_StatusCode
+UA_Server_addTimedCallback(UA_Server *server, UA_ServerCallback callback,
+                           void *data, UA_DateTime date, UA_UInt64 *callbackId) {
+    return UA_Timer_addTimedCallback(&server->timer,
+                                     (UA_ApplicationCallback)callback,
+                                     server, data, date, callbackId);
+}
 
 UA_StatusCode
 UA_Server_addRepeatedCallback(UA_Server *server, UA_ServerCallback callback,
-                              void *data, UA_UInt32 interval,
+                              void *data, UA_Double interval_ms,
                               UA_UInt64 *callbackId) {
     return UA_Timer_addRepeatedCallback(&server->timer,
                                         (UA_ApplicationCallback)callback,
-                                        server, data, interval, callbackId);
+                                        server, data, interval_ms, callbackId);
 }
 
 UA_StatusCode
 UA_Server_changeRepeatedCallbackInterval(UA_Server *server, UA_UInt64 callbackId,
-                                         UA_UInt32 interval) {
-    return UA_Timer_changeRepeatedCallbackInterval(&server->timer, callbackId, interval);
+                                         UA_Double interval_ms) {
+    return UA_Timer_changeRepeatedCallbackInterval(&server->timer, callbackId,
+                                                   interval_ms);
 }
 
-UA_StatusCode
-UA_Server_removeRepeatedCallback(UA_Server *server, UA_UInt64 callbackId) {
-    return UA_Timer_removeRepeatedCallback(&server->timer, callbackId);
+void
+UA_Server_removeCallback(UA_Server *server, UA_UInt64 callbackId) {
+    UA_Timer_removeCallback(&server->timer, callbackId);
 }
 
 UA_StatusCode UA_EXPORT
@@ -398,17 +328,36 @@ UA_Server_updateCertificate(UA_Server *server,
 
     size_t i = 0;
     while (i < server->config.endpointsSize) {
-        UA_EndpointDescription *ed = &server->config.endpoints[i].endpointDescription;
+        UA_EndpointDescription *ed = &server->config.endpoints[i];
         if (UA_ByteString_equal(&ed->serverCertificate, oldCertificate)) {
             UA_String_deleteMembers(&ed->serverCertificate);
             UA_String_copy(newCertificate, &ed->serverCertificate);
-            UA_SecurityPolicy *sp = &server->config.endpoints[i].securityPolicy;
+            UA_SecurityPolicy *sp = UA_SecurityPolicy_getSecurityPolicyByUri(server, &server->config.endpoints[i].securityPolicyUri);
+            if(!sp)
+                return UA_STATUSCODE_BADINTERNALERROR;
             sp->updateCertificateAndPrivateKey(sp, *newCertificate, *newPrivateKey);
         }
         i++;
     }
 
     return UA_STATUSCODE_GOOD;
+}
+
+/***************************/
+/* Server lookup functions */
+/***************************/
+
+UA_SecurityPolicy *
+UA_SecurityPolicy_getSecurityPolicyByUri(const UA_Server *server,
+                                         UA_ByteString *securityPolicyUri)
+{
+    for(size_t i = 0; i < server->config.securityPoliciesSize; i++) {
+        UA_SecurityPolicy *securityPolicyCandidate = &server->config.securityPolicies[i];
+        if(UA_ByteString_equal(securityPolicyUri,
+                               &securityPolicyCandidate->policyUri))
+            return securityPolicyCandidate;
+    }
+    return NULL;
 }
 
 /********************/
@@ -431,7 +380,7 @@ UA_Server_run_startup(UA_Server *server) {
 	
 	/* At least one endpoint has to be configured */
     if(server->config.endpointsSize == 0) {
-        UA_LOG_WARNING(server->config.logger, UA_LOGCATEGORY_SERVER,
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                        "There has to be at least one endpoint.");
     }
 
@@ -451,7 +400,7 @@ UA_Server_run_startup(UA_Server *server) {
 
     /* Spin up the worker threads */
 #ifdef UA_ENABLE_MULTITHREADING
-    UA_LOG_INFO(server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
                 "Spinning up %u worker thread(s)", server->config.nThreads);
     UA_WorkQueue_start(&server->workQueue, server->config.nThreads);
 #endif
@@ -535,7 +484,7 @@ UA_Server_run_shutdown(UA_Server *server) {
 
 #ifdef UA_ENABLE_MULTITHREADING
     /* Shut down the workers */
-    UA_LOG_INFO(server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
                 "Shutting down %u worker thread(s)",
                 (UA_UInt32)server->workQueue.workersSize);
     UA_WorkQueue_stop(&server->workQueue);
@@ -574,3 +523,40 @@ UA_Server_run(UA_Server *server, volatile UA_Boolean *running) {
     }
     return UA_Server_run_shutdown(server);
 }
+
+#ifdef UA_ENABLE_HISTORIZING
+/* Allow insert of historical data */
+UA_Boolean
+UA_Server_AccessControl_allowHistoryUpdateUpdateData(UA_Server *server,
+                                                     const UA_NodeId *sessionId, void *sessionContext,
+                                                     const UA_NodeId *nodeId,
+                                                     UA_PerformUpdateType performInsertReplace,
+                                                     const UA_DataValue *value) {
+    if(server->config.accessControl.allowHistoryUpdateUpdateData &&
+            !server->config.accessControl.allowHistoryUpdateUpdateData(server, &server->config.accessControl,
+                                                                       sessionId, sessionContext, nodeId,
+                                                                       performInsertReplace, value)) {
+        return false;
+    }
+    return true;
+}
+
+/* Allow delete of historical data */
+UA_Boolean
+UA_Server_AccessControl_allowHistoryUpdateDeleteRawModified(UA_Server *server,
+                                                            const UA_NodeId *sessionId, void *sessionContext,
+                                                            const UA_NodeId *nodeId,
+                                                            UA_DateTime startTimestamp,
+                                                            UA_DateTime endTimestamp,
+                                                            bool isDeleteModified) {
+    if(server->config.accessControl.allowHistoryUpdateDeleteRawModified &&
+            !server->config.accessControl.allowHistoryUpdateDeleteRawModified(server, &server->config.accessControl,
+                                                                              sessionId, sessionContext, nodeId,
+                                                                              startTimestamp, endTimestamp,
+                                                                              isDeleteModified)) {
+        return false;
+    }
+    return true;
+
+}
+#endif // UA_ENABLE_HISTORIZING

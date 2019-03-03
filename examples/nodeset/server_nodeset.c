@@ -1,13 +1,17 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+
 #include <signal.h>
+#include <stdlib.h>
 
 /* Files example_namespace.h and example_namespace.c are created from server_nodeset.xml in the
  * /src_generated directory by CMake */
 #include "ua_namespace_example.h"
-#include "example_nodeset_ids.h"
+#include "example_nodeids.h"
 
 UA_Boolean running = true;
 
@@ -46,5 +50,5 @@ int main(int argc, char** argv) {
 
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

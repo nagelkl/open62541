@@ -13,7 +13,6 @@
 
 _UA_BEGIN_DECLS
 
-struct UA_HistoryDatabase;
 typedef struct UA_HistoryDatabase UA_HistoryDatabase;
 
 struct UA_HistoryDatabase {
@@ -73,6 +72,24 @@ struct UA_HistoryDatabase {
                const UA_HistoryReadValueId *nodesToRead,
                UA_HistoryReadResponse *response,
                UA_HistoryData * const * const historyData);
+
+    void
+    (*updateData)(UA_Server *server,
+                  void *hdbContext,
+                  const UA_NodeId *sessionId,
+                  void *sessionContext,
+                  const UA_RequestHeader *requestHeader,
+                  const UA_UpdateDataDetails *details,
+                  UA_HistoryUpdateResult *result);
+
+    void
+    (*deleteRawModified)(UA_Server *server,
+                         void *hdbContext,
+                         const UA_NodeId *sessionId,
+                         void *sessionContext,
+                         const UA_RequestHeader *requestHeader,
+                         const UA_DeleteRawModifiedDetails *details,
+                         UA_HistoryUpdateResult *result);
 
     /* Add more function pointer here.
      * For example for read_event, read_modified, read_processed, read_at_time */

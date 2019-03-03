@@ -37,6 +37,13 @@ const UA_Guid UA_GUID_NULL = {0, 0, 0, {0,0,0,0,0,0,0,0}};
 const UA_NodeId UA_NODEID_NULL = {0, UA_NODEIDTYPE_NUMERIC, {0}};
 const UA_ExpandedNodeId UA_EXPANDEDNODEID_NULL = {{0, UA_NODEIDTYPE_NUMERIC, {0}}, {0, NULL}, 0};
 
+typedef UA_StatusCode (*UA_copySignature)(const void *src, void *dst,
+                                          const UA_DataType *type);
+typedef void (*UA_clearSignature)(void *p, const UA_DataType *type);
+
+extern const UA_copySignature copyJumpTable[UA_DATATYPEKINDS];
+extern const UA_clearSignature clearJumpTable[UA_DATATYPEKINDS];
+
 /* TODO: The standard-defined types are ordered. See if binary search is
  * more efficient. */
 const UA_DataType *
@@ -88,9 +95,6 @@ UA_UInt32_random(void) {
 /* Builtin Types */
 /*****************/
 
-static void deleteMembers_noInit(void *p, const UA_DataType *type);
-static UA_StatusCode copy_noInit(const void *src, void *dst, const UA_DataType *type);
-
 UA_String
 UA_String_fromChars(char const src[]) {
     UA_String str;
@@ -110,6 +114,8 @@ UA_Boolean
 UA_String_equal(const UA_String *s1, const UA_String *s2) {
     if(s1->length != s2->length)
         return false;
+    if(s1->length == 0)
+        return true;
     i32 is = memcmp((char const*)s1->data,
                     (char const*)s2->data, s1->length);
     return (is == 0) ? true : false;
@@ -125,7 +131,7 @@ String_copy(UA_String const *src, UA_String *dst, const UA_DataType *_) {
 }
 
 static void
-String_deleteMembers(UA_String *s, const UA_DataType *_) {
+String_clear(UA_String *s, const UA_DataType *_) {
     UA_Array_delete(s->data, s->length, &UA_TYPES[UA_TYPES_BYTE]);
 }
 
@@ -137,8 +143,8 @@ QualifiedName_copy(const UA_QualifiedName *src, UA_QualifiedName *dst, const UA_
 }
 
 static void
-QualifiedName_deleteMembers(UA_QualifiedName *p, const UA_DataType *_) {
-    String_deleteMembers(&p->name, NULL);
+QualifiedName_clear(UA_QualifiedName *p, const UA_DataType *_) {
+    String_clear(&p->name, NULL);
 }
 
 UA_Boolean
@@ -221,11 +227,11 @@ UA_ByteString_allocBuffer(UA_ByteString *bs, size_t length) {
 
 /* NodeId */
 static void
-NodeId_deleteMembers(UA_NodeId *p, const UA_DataType *_) {
+NodeId_clear(UA_NodeId *p, const UA_DataType *_) {
     switch(p->identifierType) {
     case UA_NODEIDTYPE_STRING:
     case UA_NODEIDTYPE_BYTESTRING:
-        String_deleteMembers(&p->identifier.string, NULL);
+        String_clear(&p->identifier.string, NULL);
         break;
     default: break;
     }
@@ -337,9 +343,9 @@ UA_NodeId_hash(const UA_NodeId *n) {
 
 /* ExpandedNodeId */
 static void
-ExpandedNodeId_deleteMembers(UA_ExpandedNodeId *p, const UA_DataType *_) {
-    NodeId_deleteMembers(&p->nodeId, _);
-    String_deleteMembers(&p->namespaceUri, NULL);
+ExpandedNodeId_clear(UA_ExpandedNodeId *p, const UA_DataType *_) {
+    NodeId_clear(&p->nodeId, _);
+    String_clear(&p->namespaceUri, NULL);
 }
 
 static UA_StatusCode
@@ -353,13 +359,13 @@ ExpandedNodeId_copy(UA_ExpandedNodeId const *src, UA_ExpandedNodeId *dst,
 
 /* ExtensionObject */
 static void
-ExtensionObject_deleteMembers(UA_ExtensionObject *p, const UA_DataType *_) {
+ExtensionObject_clear(UA_ExtensionObject *p, const UA_DataType *_) {
     switch(p->encoding) {
     case UA_EXTENSIONOBJECT_ENCODED_NOBODY:
     case UA_EXTENSIONOBJECT_ENCODED_BYTESTRING:
     case UA_EXTENSIONOBJECT_ENCODED_XML:
-        NodeId_deleteMembers(&p->content.encoded.typeId, NULL);
-        String_deleteMembers(&p->content.encoded.body, NULL);
+        NodeId_clear(&p->content.encoded.typeId, NULL);
+        String_clear(&p->content.encoded.body, NULL);
         break;
     case UA_EXTENSIONOBJECT_DECODED:
         if(p->content.decoded.data)
@@ -401,13 +407,14 @@ ExtensionObject_copy(UA_ExtensionObject const *src, UA_ExtensionObject *dst,
 
 /* Variant */
 static void
-Variant_deletemembers(UA_Variant *p, const UA_DataType *_) {
+Variant_clear(UA_Variant *p, const UA_DataType *_) {
     if(p->storageType != UA_VARIANT_DATA)
         return;
     if(p->type && p->data > UA_EMPTY_ARRAY_SENTINEL) {
         if(p->arrayLength == 0)
             p->arrayLength = 1;
         UA_Array_delete(p->data, p->arrayLength, p->type);
+        p->data = NULL;
     }
     if((void*)p->arrayDimensions > UA_EMPTY_ARRAY_SENTINEL)
         UA_free(p->arrayDimensions);
@@ -711,7 +718,7 @@ UA_Variant_copyRange(const UA_Variant *src, UA_Variant *dst,
         dst->arrayDimensions =
             (u32*)UA_Array_new(thisrange.dimensionsSize, &UA_TYPES[UA_TYPES_UINT32]);
         if(!dst->arrayDimensions) {
-            Variant_deletemembers(dst, NULL);
+            Variant_clear(dst, NULL);
             return UA_STATUSCODE_BADOUTOFMEMORY;
         }
         dst->arrayDimensionsSize = thisrange.dimensionsSize;
@@ -750,7 +757,7 @@ Variant_setRange(UA_Variant *v, void *array, size_t arraySize,
     } else {
         for(size_t i = 0; i < block_count; ++i) {
             for(size_t j = 0; j < block; ++j) {
-                deleteMembers_noInit((void*)nextdst, v->type);
+                clearJumpTable[v->type->typeKind]((void*)nextdst, v->type);
                 retval |= UA_copy((void*)nextsrc, (void*)nextdst, v->type);
                 nextdst += elem_size;
                 nextsrc += elem_size;
@@ -781,9 +788,9 @@ UA_Variant_setRangeCopy(UA_Variant *v, const void *array,
 
 /* LocalizedText */
 static void
-LocalizedText_deleteMembers(UA_LocalizedText *p, const UA_DataType *_) {
-    String_deleteMembers(&p->locale, NULL);
-    String_deleteMembers(&p->text, NULL);
+LocalizedText_clear(UA_LocalizedText *p, const UA_DataType *_) {
+    String_clear(&p->locale, NULL);
+    String_clear(&p->text, NULL);
 }
 
 static UA_StatusCode
@@ -796,8 +803,8 @@ LocalizedText_copy(UA_LocalizedText const *src, UA_LocalizedText *dst,
 
 /* DataValue */
 static void
-DataValue_deleteMembers(UA_DataValue *p, const UA_DataType *_) {
-    Variant_deletemembers(&p->value, NULL);
+DataValue_clear(UA_DataValue *p, const UA_DataType *_) {
+    Variant_clear(&p->value, NULL);
 }
 
 static UA_StatusCode
@@ -807,16 +814,16 @@ DataValue_copy(UA_DataValue const *src, UA_DataValue *dst,
     UA_Variant_init(&dst->value);
     UA_StatusCode retval = Variant_copy(&src->value, &dst->value, NULL);
     if(retval != UA_STATUSCODE_GOOD)
-        DataValue_deleteMembers(dst, NULL);
+        DataValue_clear(dst, NULL);
     return retval;
 }
 
 /* DiagnosticInfo */
 static void
-DiagnosticInfo_deleteMembers(UA_DiagnosticInfo *p, const UA_DataType *_) {
-    String_deleteMembers(&p->additionalInfo, NULL);
+DiagnosticInfo_clear(UA_DiagnosticInfo *p, const UA_DataType *_) {
+    String_clear(&p->additionalInfo, NULL);
     if(p->hasInnerDiagnosticInfo && p->innerDiagnosticInfo) {
-        DiagnosticInfo_deleteMembers(p->innerDiagnosticInfo, NULL);
+        DiagnosticInfo_clear(p->innerDiagnosticInfo, NULL);
         UA_free(p->innerDiagnosticInfo);
     }
 }
@@ -884,53 +891,19 @@ copyGuid(const UA_Guid *src, UA_Guid *dst, const UA_DataType *_) {
     return UA_STATUSCODE_GOOD;
 }
 
-typedef UA_StatusCode
-(*UA_copySignature)(const void *src, void *dst, const UA_DataType *type);
-
-static const UA_copySignature copyJumpTable[UA_BUILTIN_TYPES_COUNT + 1] = {
-    (UA_copySignature)copyByte, // Boolean
-    (UA_copySignature)copyByte, // SByte
-    (UA_copySignature)copyByte, // Byte
-    (UA_copySignature)copy2Byte, // Int16
-    (UA_copySignature)copy2Byte, // UInt16
-    (UA_copySignature)copy4Byte, // Int32
-    (UA_copySignature)copy4Byte, // UInt32
-    (UA_copySignature)copy8Byte, // Int64
-    (UA_copySignature)copy8Byte, // UInt64
-    (UA_copySignature)copy4Byte, // Float
-    (UA_copySignature)copy8Byte, // Double
-    (UA_copySignature)String_copy,
-    (UA_copySignature)copy8Byte, // DateTime
-    (UA_copySignature)copyGuid, // Guid
-    (UA_copySignature)String_copy, // ByteString
-    (UA_copySignature)String_copy, // XmlElement
-    (UA_copySignature)NodeId_copy,
-    (UA_copySignature)ExpandedNodeId_copy,
-    (UA_copySignature)copy4Byte, // StatusCode
-    (UA_copySignature)QualifiedName_copy,
-    (UA_copySignature)LocalizedText_copy,
-    (UA_copySignature)ExtensionObject_copy,
-    (UA_copySignature)DataValue_copy,
-    (UA_copySignature)Variant_copy,
-    (UA_copySignature)DiagnosticInfo_copy,
-    (UA_copySignature)copy_noInit // all others
-};
-
 static UA_StatusCode
-copy_noInit(const void *src, void *dst, const UA_DataType *type) {
+copyStructure(const void *src, void *dst, const UA_DataType *type) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     uintptr_t ptrs = (uintptr_t)src;
     uintptr_t ptrd = (uintptr_t)dst;
-    u8 membersSize = type->membersSize;
-    for(size_t i = 0; i < membersSize; ++i) {
+    const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
+    for(size_t i = 0; i < type->membersSize; ++i) {
         const UA_DataTypeMember *m= &type->members[i];
-        const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
         const UA_DataType *mt = &typelists[!m->namespaceZero][m->memberTypeIndex];
         if(!m->isArray) {
             ptrs += m->padding;
             ptrd += m->padding;
-            size_t fi = mt->builtin ? mt->typeIndex : UA_BUILTIN_TYPES_COUNT;
-            retval |= copyJumpTable[fi]((const void*)ptrs, (void*)ptrd, mt);
+            retval |= copyJumpTable[mt->typeKind]((const void*)ptrs, (void*)ptrd, mt);
             ptrs += mt->memSize;
             ptrd += mt->memSize;
         } else {
@@ -952,61 +925,64 @@ copy_noInit(const void *src, void *dst, const UA_DataType *type) {
     return retval;
 }
 
+static UA_StatusCode
+copyNotImplemented(const void *src, void *dst, const UA_DataType *type) {
+    return UA_STATUSCODE_BADNOTIMPLEMENTED;
+}
+
+const UA_copySignature copyJumpTable[UA_DATATYPEKINDS] = {
+    (UA_copySignature)copyByte, /* Boolean */
+    (UA_copySignature)copyByte, /* SByte */
+    (UA_copySignature)copyByte, /* Byte */
+    (UA_copySignature)copy2Byte, /* Int16 */
+    (UA_copySignature)copy2Byte, /* UInt16 */
+    (UA_copySignature)copy4Byte, /* Int32 */
+    (UA_copySignature)copy4Byte, /* UInt32 */
+    (UA_copySignature)copy8Byte, /* Int64 */
+    (UA_copySignature)copy8Byte, /* UInt64 */
+    (UA_copySignature)copy4Byte, /* Float */
+    (UA_copySignature)copy8Byte, /* Double */
+    (UA_copySignature)String_copy,
+    (UA_copySignature)copy8Byte, /* DateTime */
+    (UA_copySignature)copyGuid, /* Guid */
+    (UA_copySignature)String_copy, /* ByteString */
+    (UA_copySignature)String_copy, /* XmlElement */
+    (UA_copySignature)NodeId_copy,
+    (UA_copySignature)ExpandedNodeId_copy,
+    (UA_copySignature)copy4Byte, /* StatusCode */
+    (UA_copySignature)QualifiedName_copy,
+    (UA_copySignature)LocalizedText_copy,
+    (UA_copySignature)ExtensionObject_copy,
+    (UA_copySignature)DataValue_copy,
+    (UA_copySignature)Variant_copy,
+    (UA_copySignature)DiagnosticInfo_copy,
+    (UA_copySignature)copyNotImplemented, /* Decimal */
+    (UA_copySignature)copy4Byte, /* Enumeration */
+    (UA_copySignature)copyStructure,
+    (UA_copySignature)copyNotImplemented, /* Structure with Optional Fields */
+    (UA_copySignature)copyNotImplemented, /* Union */
+    (UA_copySignature)copyNotImplemented /* BitfieldCluster*/
+};
+
 UA_StatusCode
 UA_copy(const void *src, void *dst, const UA_DataType *type) {
     memset(dst, 0, type->memSize); /* init */
-    UA_StatusCode retval = copy_noInit(src, dst, type);
+    UA_StatusCode retval = copyJumpTable[type->typeKind](src, dst, type);
     if(retval != UA_STATUSCODE_GOOD)
-        UA_deleteMembers(dst, type);
+        UA_clear(dst, type);
     return retval;
 }
 
-static void nopDeleteMembers(void *p, const UA_DataType *type) { }
-
-typedef void (*UA_deleteMembersSignature)(void *p, const UA_DataType *type);
-
-static const
-UA_deleteMembersSignature deleteMembersJumpTable[UA_BUILTIN_TYPES_COUNT + 1] = {
-    (UA_deleteMembersSignature)nopDeleteMembers, // Boolean
-    (UA_deleteMembersSignature)nopDeleteMembers, // SByte
-    (UA_deleteMembersSignature)nopDeleteMembers, // Byte
-    (UA_deleteMembersSignature)nopDeleteMembers, // Int16
-    (UA_deleteMembersSignature)nopDeleteMembers, // UInt16
-    (UA_deleteMembersSignature)nopDeleteMembers, // Int32
-    (UA_deleteMembersSignature)nopDeleteMembers, // UInt32
-    (UA_deleteMembersSignature)nopDeleteMembers, // Int64
-    (UA_deleteMembersSignature)nopDeleteMembers, // UInt64
-    (UA_deleteMembersSignature)nopDeleteMembers, // Float
-    (UA_deleteMembersSignature)nopDeleteMembers, // Double
-    (UA_deleteMembersSignature)String_deleteMembers, // String
-    (UA_deleteMembersSignature)nopDeleteMembers, // DateTime
-    (UA_deleteMembersSignature)nopDeleteMembers, // Guid
-    (UA_deleteMembersSignature)String_deleteMembers, // ByteString
-    (UA_deleteMembersSignature)String_deleteMembers, // XmlElement
-    (UA_deleteMembersSignature)NodeId_deleteMembers,
-    (UA_deleteMembersSignature)ExpandedNodeId_deleteMembers,
-    (UA_deleteMembersSignature)nopDeleteMembers, // StatusCode
-    (UA_deleteMembersSignature)QualifiedName_deleteMembers,
-    (UA_deleteMembersSignature)LocalizedText_deleteMembers,
-    (UA_deleteMembersSignature)ExtensionObject_deleteMembers,
-    (UA_deleteMembersSignature)DataValue_deleteMembers,
-    (UA_deleteMembersSignature)Variant_deletemembers,
-    (UA_deleteMembersSignature)DiagnosticInfo_deleteMembers,
-    (UA_deleteMembersSignature)deleteMembers_noInit,
-};
-
 static void
-deleteMembers_noInit(void *p, const UA_DataType *type) {
+clearStructure(void *p, const UA_DataType *type) {
     uintptr_t ptr = (uintptr_t)p;
-    u8 membersSize = type->membersSize;
-    for(size_t i = 0; i < membersSize; ++i) {
-        const UA_DataTypeMember *m= &type->members[i];
-        const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
+    const UA_DataType *typelists[2] = { UA_TYPES, &type[-type->typeIndex] };
+    for(size_t i = 0; i < type->membersSize; ++i) {
+        const UA_DataTypeMember *m = &type->members[i];
         const UA_DataType *mt = &typelists[!m->namespaceZero][m->memberTypeIndex];
         if(!m->isArray) {
             ptr += m->padding;
-            size_t fi = mt->builtin ? mt->typeIndex : UA_BUILTIN_TYPES_COUNT;
-            deleteMembersJumpTable[fi]((void*)ptr, mt);
+            clearJumpTable[mt->typeKind]((void*)ptr, mt);
             ptr += mt->memSize;
         } else {
             ptr += m->padding;
@@ -1018,15 +994,52 @@ deleteMembers_noInit(void *p, const UA_DataType *type) {
     }
 }
 
+static void nopClear(void *p, const UA_DataType *type) { }
+
+const
+UA_clearSignature clearJumpTable[UA_DATATYPEKINDS] = {
+    (UA_clearSignature)nopClear, /* Boolean */
+    (UA_clearSignature)nopClear, /* SByte */
+    (UA_clearSignature)nopClear, /* Byte */
+    (UA_clearSignature)nopClear, /* Int16 */
+    (UA_clearSignature)nopClear, /* UInt16 */
+    (UA_clearSignature)nopClear, /* Int32 */
+    (UA_clearSignature)nopClear, /* UInt32 */
+    (UA_clearSignature)nopClear, /* Int64 */
+    (UA_clearSignature)nopClear, /* UInt64 */
+    (UA_clearSignature)nopClear, /* Float */
+    (UA_clearSignature)nopClear, /* Double */
+    (UA_clearSignature)String_clear, /* String */
+    (UA_clearSignature)nopClear, /* DateTime */
+    (UA_clearSignature)nopClear, /* Guid */
+    (UA_clearSignature)String_clear, /* ByteString */
+    (UA_clearSignature)String_clear, /* XmlElement */
+    (UA_clearSignature)NodeId_clear,
+    (UA_clearSignature)ExpandedNodeId_clear,
+    (UA_clearSignature)nopClear, /* StatusCode */
+    (UA_clearSignature)QualifiedName_clear,
+    (UA_clearSignature)LocalizedText_clear,
+    (UA_clearSignature)ExtensionObject_clear,
+    (UA_clearSignature)DataValue_clear,
+    (UA_clearSignature)Variant_clear,
+    (UA_clearSignature)DiagnosticInfo_clear,
+    (UA_clearSignature)nopClear, /* Decimal, not implemented */
+    (UA_clearSignature)nopClear, /* Enumeration */
+    (UA_clearSignature)clearStructure,
+    (UA_clearSignature)nopClear, /* Struct with Optional Fields, not implemented*/
+    (UA_clearSignature)nopClear, /* Union, not implemented*/
+    (UA_clearSignature)nopClear /* BitfieldCluster, not implemented*/
+};
+
 void
-UA_deleteMembers(void *p, const UA_DataType *type) {
-    deleteMembers_noInit(p, type);
+UA_clear(void *p, const UA_DataType *type) {
+    clearJumpTable[type->typeKind](p, type);
     memset(p, 0, type->memSize); /* init */
 }
 
 void
 UA_delete(void *p, const UA_DataType *type) {
-    deleteMembers_noInit(p, type);
+    clearJumpTable[type->typeKind](p, type);
     UA_free(p);
 }
 
@@ -1087,7 +1100,7 @@ UA_Array_delete(void *p, size_t size, const UA_DataType *type) {
     if(!type->pointerFree) {
         uintptr_t ptr = (uintptr_t)p;
         for(size_t i = 0; i < size; ++i) {
-            UA_deleteMembers((void*)ptr, type);
+            UA_clear((void*)ptr, type);
             ptr += type->memSize;
         }
     }

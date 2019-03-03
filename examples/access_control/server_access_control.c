@@ -1,8 +1,14 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_plugin_access_control.h>
+#include <ua_accesscontrol_default.h>
+#include <ua_log_stdout.h>
+
 #include <signal.h>
+#include <stdlib.h>
 
 static UA_Boolean
 allowAddNode(UA_Server *server, UA_AccessControl *ac,
@@ -42,11 +48,21 @@ static void stopHandler(int sign) {
     running = false;
 }
 
+static UA_UsernamePasswordLogin logins[2] = {
+    {UA_STRING_STATIC("peter"), UA_STRING_STATIC("peter123")},
+    {UA_STRING_STATIC("paula"), UA_STRING_STATIC("paula123")}
+};
+
 int main(void) {
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
 
     UA_ServerConfig *config = UA_ServerConfig_new_default();
+    // disable anonymous logins, enable two user/password logins
+    config->accessControl.deleteMembers(&config->accessControl);
+    if (UA_AccessControl_default(&config->accessControl, false, 2, logins) != UA_STATUSCODE_GOOD) {
+        return EXIT_FAILURE;
+    }
 
     // Set accessControl functions for nodeManagement
     config->accessControl.allowAddNode = allowAddNode;
@@ -59,5 +75,5 @@ int main(void) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

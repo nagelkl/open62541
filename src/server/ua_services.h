@@ -324,7 +324,10 @@ void Service_Write(UA_Server *server, UA_Session *session,
  * Used to read historical values or Events of one or more Nodes. Servers may
  * make historical values available to Clients using this Service, although the
  * historical values themselves are not visible in the AddressSpace. */
-/* Not Implemented */
+#ifdef UA_ENABLE_HISTORIZING
+void Service_HistoryRead(UA_Server *server, UA_Session *session,
+                         const UA_HistoryReadRequest *request,
+                         UA_HistoryReadResponse *response);
 
 /**
  * HistoryUpdate Service
@@ -332,7 +335,11 @@ void Service_Write(UA_Server *server, UA_Session *session,
  * Used to update historical values or Events of one or more Nodes. Several
  * request parameters indicate how the Server is to update the historical value
  * or Event. Valid actions are Insert, Replace or Delete. */
-/* Not Implemented */
+void
+Service_HistoryUpdate(UA_Server *server, UA_Session *session,
+                      const UA_HistoryUpdateRequest *request,
+                      UA_HistoryUpdateResponse *response);
+#endif
 
 /**
  * .. _method-services:
@@ -405,12 +412,6 @@ void Service_ModifyMonitoredItems(UA_Server *server, UA_Session *session,
 void Service_SetMonitoringMode(UA_Server *server, UA_Session *session,
                                const UA_SetMonitoringModeRequest *request,
                                UA_SetMonitoringModeResponse *response);
-
-#ifdef UA_ENABLE_HISTORIZING
-void Service_HistoryRead(UA_Server *server, UA_Session *session,
-                         const UA_HistoryReadRequest *request,
-                         UA_HistoryReadResponse *response);
-#endif
 
 /**
  * SetTriggering Service

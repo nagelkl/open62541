@@ -20,8 +20,12 @@
  * you have the ``open62541.c/.h`` files in the current folder. Now create a new
  * C source-file called ``myServer.c`` with the following content: */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+
 #include <signal.h>
+#include <stdlib.h>
 
 UA_Boolean running = true;
 static void stopHandler(int sig) {
@@ -39,7 +43,7 @@ int main(void) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 /**
@@ -107,6 +111,4 @@ int main(void) {
  *
  * The server configuration and lifecycle management is needed for all servers.
  * We will use it in the following tutorials without further comment.
- *
- * .. [#f1] Be careful with global variables in multi-threaded applications. You
- *          might want to allocate the ``running`` variable on the heap. */
+ */

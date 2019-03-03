@@ -1,7 +1,13 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include "open62541.h"
+
+#ifdef UA_ENABLE_AMALGAMATION
+# include <open62541.h>
+#else
+# include "ua_types.h"
+# include "ua_types_generated_handling.h"
+#endif
 
 /* loadFile parses the certificate file.
  *
@@ -26,7 +32,7 @@ loadFile(const char *const path) {
         fseek(fp, 0, SEEK_SET);
         size_t read = fread(fileContents.data, sizeof(UA_Byte), fileContents.length, fp);
         if(read != fileContents.length)
-            UA_ByteString_deleteMembers(&fileContents);
+            UA_ByteString_clear(&fileContents);
     } else {
         fileContents.length = 0;
     }

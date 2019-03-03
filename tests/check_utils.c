@@ -200,6 +200,9 @@ START_TEST(readNumberWithBase) {
     ck_assert_uint_eq(UA_readNumberWithBase((UA_Byte*)"f", 1, &result, 16), 1);
     ck_assert_uint_eq(result, 15);
 
+    ck_assert_uint_eq(UA_readNumberWithBase((UA_Byte*)"F", 1, &result, 16), 1);
+    ck_assert_uint_eq(result, 15);
+
     ck_assert_uint_eq(UA_readNumberWithBase((UA_Byte*)"1x", 2, &result, 16), 1);
     ck_assert_uint_eq(result, 1);
 
@@ -237,7 +240,7 @@ END_TEST
 
 static void assertNodeIdString(const UA_String *gotStr, const char* expectedStr) {
     size_t expectedStringLength = strlen(expectedStr);
-    ck_assert_uint_ge(gotStr->length, expectedStringLength);
+    ck_assert_uint_eq(gotStr->length, expectedStringLength);
     char *gotChars = (char*)UA_malloc(gotStr->length+1);
     memcpy(gotChars, gotStr->data, gotStr->length);
     gotChars[gotStr->length] = 0;

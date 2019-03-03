@@ -53,27 +53,7 @@ _UA_BEGIN_DECLS
 
 /* Create a new client */
 UA_Client UA_EXPORT *
-UA_Client_new(UA_ClientConfig config);
-
-/* Creates a new secure client with the required configuration, certificate
- * privatekey, trustlist and revocation list.
- *
- * @param  config                   new secure configuration for client
- * @param  certificate              client certificate
- * @param  privateKey               client's private key
- * @param  remoteCertificate        server certificate form the endpoints
- * @param  trustList                list of trustable certificate
- * @param  trustListSize            count of trustList
- * @param  revocationList           list of revoked digital certificate
- * @param  revocationListSize       count of revocationList
- * @param  securityPolicyFunction   securityPolicy function
- * @return Returns a client configuration for secure channel */
-UA_Client UA_EXPORT *
-UA_Client_secure_new(UA_ClientConfig config, UA_ByteString certificate,
-                     UA_ByteString privateKey, const UA_ByteString *remoteCertificate,
-                     const UA_ByteString *trustList, size_t trustListSize,
-                     const UA_ByteString *revocationList, size_t revocationListSize,
-                     UA_SecurityPolicy_Func securityPolicyFunction);
+UA_Client_new(void);
 
 /* Get the client connection status */
 UA_ClientState UA_EXPORT
@@ -86,9 +66,7 @@ UA_Client_getConfig(UA_Client *client);
 /* Get the client context */
 static UA_INLINE void *
 UA_Client_getContext(UA_Client *client) {
-    UA_ClientConfig *config = UA_Client_getConfig(client);
-    if(!config)
-        return NULL;
+    UA_ClientConfig *config = UA_Client_getConfig(client); /* Cannot fail */
     return config->clientContext;
 }
 
@@ -116,9 +94,9 @@ UA_StatusCode UA_EXPORT
 UA_Client_connect(UA_Client *client, const char *endpointUrl);
 
 UA_StatusCode UA_EXPORT
-UA_Client_connect_async (UA_Client *client, const char *endpointUrl,
-                         UA_ClientAsyncServiceCallback callback,
-                         void *connected);
+UA_Client_connect_async(UA_Client *client, const char *endpointUrl,
+                        UA_ClientAsyncServiceCallback callback,
+                        void *connected);
 
 /* Connect to the server without creating a session
  *
@@ -256,6 +234,27 @@ UA_Client_Service_write(UA_Client *client, const UA_WriteRequest request) {
                         &response, &UA_TYPES[UA_TYPES_WRITERESPONSE]);
     return response;
 }
+
+/*
+* Historical Access Service Set
+* ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ */
+#ifdef UA_ENABLE_HISTORIZING
+static UA_INLINE UA_HistoryReadResponse
+UA_Client_Service_historyRead(UA_Client *client, const UA_HistoryReadRequest request) {
+    UA_HistoryReadResponse response;
+    __UA_Client_Service(client, &request, &UA_TYPES[UA_TYPES_HISTORYREADREQUEST],
+        &response, &UA_TYPES[UA_TYPES_HISTORYREADRESPONSE]);
+    return response;
+}
+
+static UA_INLINE UA_HistoryUpdateResponse
+UA_Client_Service_historyUpdate(UA_Client *client, const UA_HistoryUpdateRequest request) {
+    UA_HistoryUpdateResponse response;
+    __UA_Client_Service(client, &request, &UA_TYPES[UA_TYPES_HISTORYUPDATEREQUEST],
+        &response, &UA_TYPES[UA_TYPES_HISTORYUPDATERESPONSE]);
+    return response;
+}
+#endif
 
 /*
  * Method Service Set
@@ -468,26 +467,58 @@ __UA_Client_AsyncServiceEx(UA_Client *client, const void *request,
                            UA_UInt32 timeout);
 
 /**
- * Repeated Callbacks
- * ------------------
+ * Timed Callbacks
+ * ---------------
  * Repeated callbacks can be attached to a client and will be executed in the
  * defined interval. */
 
 typedef void (*UA_ClientCallback)(UA_Client *client, void *data);
 
-UA_StatusCode
-UA_Client_addRepeatedCallback(UA_Client *client,
-                              UA_ClientCallback callback,
-                              void *data, UA_UInt32 interval,
+/* Add a callback for execution at a specified time. If the indicated time lies
+ * in the past, then the callback is executed at the next iteration of the
+ * server's main loop.
+ *
+ * @param client The client object.
+ * @param callback The callback that shall be added.
+ * @param data Data that is forwarded to the callback.
+ * @param date The timestamp for the execution time.
+ * @param callbackId Set to the identifier of the repeated callback . This can
+ *        be used to cancel the callback later on. If the pointer is null, the
+ *        identifier is not set.
+ * @return Upon success, UA_STATUSCODE_GOOD is returned. An error code
+ *         otherwise. */
+UA_StatusCode UA_EXPORT
+UA_Client_addTimedCallback(UA_Client *client, UA_ClientCallback callback,
+                           void *data, UA_DateTime date, UA_UInt64 *callbackId);
+
+/* Add a callback for cyclic repetition to the client.
+ *
+ * @param client The client object.
+ * @param callback The callback that shall be added.
+ * @param data Data that is forwarded to the callback.
+ * @param interval_ms The callback shall be repeatedly executed with the given
+ *        interval (in ms). The interval must be positive. The first execution
+ *        occurs at now() + interval at the latest.
+ * @param callbackId Set to the identifier of the repeated callback . This can
+ *        be used to cancel the callback later on. If the pointer is null, the
+ *        identifier is not set.
+ * @return Upon success, UA_STATUSCODE_GOOD is returned. An error code
+ *         otherwise. */
+UA_StatusCode UA_EXPORT
+UA_Client_addRepeatedCallback(UA_Client *client, UA_ClientCallback callback,
+                              void *data, UA_Double interval_ms,
                               UA_UInt64 *callbackId);
 
-UA_StatusCode
+UA_StatusCode UA_EXPORT
 UA_Client_changeRepeatedCallbackInterval(UA_Client *client,
                                          UA_UInt64 callbackId,
-                                         UA_UInt32 interval);
+                                         UA_Double interval_ms);
 
-UA_StatusCode UA_Client_removeRepeatedCallback(UA_Client *client,
-                                               UA_UInt64 callbackId);
+void UA_EXPORT
+UA_Client_removeCallback(UA_Client *client, UA_UInt64 callbackId);
+
+#define UA_Client_removeRepeatedCallback(client, callbackId) \
+    UA_Client_removeCallback(client, callbackId)
 
 /**
  * .. toctree::

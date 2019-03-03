@@ -31,18 +31,17 @@
 
 UA_Server *server;
 UA_ServerConfig *config;
-UA_Boolean *running;
+UA_Boolean running;
 pthread_t server_thread;
 
 static void * serverloop(void *_) {
-    while(*running)
+    while(running)
         UA_Server_run_iterate(server, true);
     return NULL;
 }
 
 static void start_server(void) {
-    running = UA_Boolean_new();
-    *running = true;
+    running = true;
     config = UA_ServerConfig_new_default();
     server = UA_Server_new(config);
     UA_Server_run_startup(server);
@@ -50,10 +49,9 @@ static void start_server(void) {
 }
 
 static void teardown_server(void) {
-    *running = false;
+    running = false;
     pthread_join(server_thread, NULL);
     UA_Server_run_shutdown(server);
-    UA_Boolean_delete(running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
 }
@@ -566,7 +564,9 @@ int main(void) {
     emptyCorpusDir();
     start_server();
 
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+
     // this will also call getEndpointsRequest
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     if(retval == UA_STATUSCODE_GOOD)
@@ -576,7 +576,8 @@ int main(void) {
 
     if(retval == UA_STATUSCODE_GOOD) {
         // now also connect with user/pass so that fuzzer also knows how to do that
-        client = UA_Client_new(UA_ClientConfig_default);
+        client = UA_Client_new();
+        UA_ClientConfig_setDefault(UA_Client_getConfig(client));
         retval = UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user", "password");
         retval = retval == UA_STATUSCODE_BADUSERACCESSDENIED ? UA_STATUSCODE_GOOD : retval;
         UA_Client_disconnect(client);

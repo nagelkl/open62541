@@ -20,7 +20,7 @@
 
 UA_Server *server;
 UA_ServerConfig *config;
-UA_Boolean *running;
+UA_Boolean running;
 UA_ServerNetworkLayer nl;
 THREAD_HANDLE server_thread;
 
@@ -51,14 +51,13 @@ addVariable(size_t size) {
 }
 
 THREAD_CALLBACK(serverloop) {
-    while(*running)
+    while(running)
         UA_Server_run_iterate(server, true);
     return 0;
 }
 
 static void setup(void) {
-    running = UA_Boolean_new();
-    *running = true;
+    running = true;
     config = UA_ServerConfig_new_default();
     server = UA_Server_new(config);
     UA_Server_run_startup(server);
@@ -67,16 +66,16 @@ static void setup(void) {
 }
 
 static void teardown(void) {
-    *running = false;
+    running = false;
     THREAD_JOIN(server_thread);
     UA_Server_run_shutdown(server);
-    UA_Boolean_delete(running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
 }
 
 START_TEST(Client_connect) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
 
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
@@ -87,7 +86,8 @@ START_TEST(Client_connect) {
 END_TEST
 
 START_TEST(Client_connect_username) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     UA_StatusCode retval = UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user1", "password");
 
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
@@ -98,7 +98,8 @@ START_TEST(Client_connect_username) {
 END_TEST
 
 START_TEST(Client_endpoints) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
 
     UA_EndpointDescription* endpointArray = NULL;
     size_t endpointArraySize = 0;
@@ -114,14 +115,15 @@ START_TEST(Client_endpoints) {
 END_TEST
 
 START_TEST(Client_endpoints_empty) {
-        /* Issue a getEndpoints call with empty endpointUrl.
-         * Using UA_Client_getEndpoints automatically passes the client->endpointUrl as requested endpointUrl.
-         * The spec says:
-         * The Server should return a suitable default URL if it does not recognize the HostName in the URL.
-         *
-         * See https://github.com/open62541/open62541/issues/775
-         */
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    /* Issue a getEndpoints call with empty endpointUrl.
+     * Using UA_Client_getEndpoints automatically passes the client->endpointUrl as requested endpointUrl.
+     * The spec says:
+     * The Server should return a suitable default URL if it does not recognize the HostName in the URL.
+     *
+     * See https://github.com/open62541/open62541/issues/775
+     */
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
 
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
@@ -147,7 +149,8 @@ START_TEST(Client_endpoints_empty) {
 END_TEST
 
 START_TEST(Client_read) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
@@ -164,12 +167,14 @@ START_TEST(Client_read) {
 END_TEST
 
 START_TEST(Client_renewSecureChannel) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
     /* Forward the time */
-    UA_fakeSleep((UA_UInt32)((UA_Double)UA_ClientConfig_default.secureChannelLifeTime * 0.8));
+    UA_ClientConfig *cc = UA_Client_getConfig(client);
+    UA_fakeSleep((UA_UInt32)((UA_Double)cc->secureChannelLifeTime * 0.8));
 
     /* Now read */
     UA_Variant val;
@@ -184,13 +189,13 @@ START_TEST(Client_renewSecureChannel) {
 } END_TEST
 
 START_TEST(Client_renewSecureChannelWithActiveSubscription) {
-    UA_ClientConfig uaClientConfig = UA_ClientConfig_default;
-    uaClientConfig.secureChannelLifeTime = 10000;
-    UA_Client *client = UA_Client_new(uaClientConfig);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+    UA_ClientConfig *cc = UA_Client_getConfig(client);
+    cc->secureChannelLifeTime = 10000;
+
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-
-
 
     UA_CreateSubscriptionRequest request = UA_CreateSubscriptionRequest_default();
     request.requestedLifetimeCount = 1000;
@@ -210,8 +215,8 @@ START_TEST(Client_renewSecureChannelWithActiveSubscription) {
 } END_TEST
 
 START_TEST(Client_reconnect) {
-    UA_ClientConfig clientConfig = UA_ClientConfig_default;
-    UA_Client *client = UA_Client_new(clientConfig);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
@@ -241,8 +246,8 @@ START_TEST(Client_reconnect) {
 END_TEST
 
 START_TEST(Client_delete_without_connect) {
-    UA_ClientConfig clientConfig = UA_ClientConfig_default;
-    UA_Client *client = UA_Client_new(clientConfig);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     ck_assert_msg(client != NULL);
     UA_Client_delete(client);
 }

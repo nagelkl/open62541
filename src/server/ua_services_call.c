@@ -171,7 +171,7 @@ callWithMethodAndObject(UA_Server *server, UA_Session *session,
                            session->sessionHandle, &request->methodId, method->context,
                            &request->objectId, object->context);
     if(!executable) {
-        result->statusCode = UA_STATUSCODE_BADNOTWRITABLE; // There is no NOTEXECUTABLE?
+        result->statusCode = UA_STATUSCODE_BADNOTEXECUTABLE;
         return;
     }
 
@@ -221,8 +221,8 @@ callWithMethodAndObject(UA_Server *server, UA_Session *session,
 
     /* Call the method */
     result->statusCode = method->method(server, &session->sessionId, session->sessionHandle,
-                                        &method->nodeId, (void*)(uintptr_t)method->context,
-                                        &object->nodeId, (void*)(uintptr_t)&object->context,
+                                        &method->nodeId, method->context,
+                                        &object->nodeId, object->context,
                                         request->inputArgumentsSize, request->inputArguments,
                                         result->outputArgumentsSize, result->outputArguments);
     /* TODO: Verify Output matches the argument definition */
@@ -245,7 +245,7 @@ Operation_CallMethod(UA_Server *server, UA_Session *session, void *context,
         server->config.nodestore.getNode(server->config.nodestore.context,
                                          &request->objectId);
     if(!object) {
-        result->statusCode = UA_STATUSCODE_BADNODEIDINVALID;
+        result->statusCode = UA_STATUSCODE_BADNODEIDUNKNOWN;
         server->config.nodestore.releaseNode(server->config.nodestore.context,
                                              (const UA_Node*)method);
         return;
@@ -264,7 +264,7 @@ Operation_CallMethod(UA_Server *server, UA_Session *session, void *context,
 void Service_Call(UA_Server *server, UA_Session *session,
                   const UA_CallRequest *request,
                   UA_CallResponse *response) {
-    UA_LOG_DEBUG_SESSION(server->config.logger, session,
+    UA_LOG_DEBUG_SESSION(&server->config.logger, session,
                          "Processing CallRequest");
 
     if(server->config.maxNodesPerMethodCall != 0 &&

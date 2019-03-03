@@ -30,8 +30,12 @@
  * prepended. The type and length of the input arguments is checked internally
  * by the SDK, so that we don't have to verify the arguments in the callback. */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+
 #include <signal.h>
+#include <stdlib.h>
 
 static UA_StatusCode
 helloWorldMethodCallback(UA_Server *server,
@@ -48,7 +52,7 @@ helloWorldMethodCallback(UA_Server *server,
         tmp.length += inputStr->length;
     }
     UA_Variant_setScalarCopy(output, &tmp, &UA_TYPES[UA_TYPES_STRING]);
-    UA_String_deleteMembers(&tmp);
+    UA_String_clear(&tmp);
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Hello World was called");
     return UA_STATUSCODE_GOOD;
 }
@@ -178,5 +182,5 @@ int main(void) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

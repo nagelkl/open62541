@@ -5,15 +5,19 @@
 #define _CRT_SECURE_NO_WARNINGS //disable fopen deprication warning in msvs
 #endif
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+
 #include "common.h"
+
 #include <signal.h>
+#include <stdlib.h>
 
 UA_Boolean running = true;
-UA_Logger logger = UA_Log_Stdout;
 
 static void stopHandler(int sign) {
-    UA_LOG_INFO(logger, UA_LOGCATEGORY_SERVER, "received ctrl-c");
+    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "received ctrl-c");
     running = false;
 }
 
@@ -25,18 +29,17 @@ int main(int argc, char** argv) {
     /* load certificate */
     config->serverCertificate = loadFile("server_cert.der");
     if(config->serverCertificate.length > 0)
-        UA_LOG_INFO(logger, UA_LOGCATEGORY_SERVER, "Certificate loaded");
-
+        UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Certificate loaded");
 
     UA_Server *server = UA_Server_new(config);
 
     UA_StatusCode retval = UA_Server_run(server, &running);
 
     /* deallocate certificate's memory */
-    UA_ByteString_deleteMembers(&config->serverCertificate);
+    UA_ByteString_clear(&config->serverCertificate);
 
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
 
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

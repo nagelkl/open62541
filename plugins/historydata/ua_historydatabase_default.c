@@ -29,6 +29,8 @@ getResultSize_service_default(const UA_HistoryDataBackend* backend,
                               UA_Boolean *reverse)
 {
     size_t storeEnd = backend->getEnd(server, backend->context, sessionId, sessionContext, nodeId);
+    size_t firstIndex = backend->firstIndex(server, backend->context, sessionId, sessionContext, nodeId);
+    size_t lastIndex = backend->lastIndex(server, backend->context, sessionId, sessionContext, nodeId);
     *startIndex = storeEnd;
     *endIndex = storeEnd;
     *addFirst = false;
@@ -42,7 +44,7 @@ getResultSize_service_default(const UA_HistoryDataBackend* backend,
     }
     UA_Boolean equal = start == end;
     size_t size = 0;
-    if (storeEnd > 0) {
+    if (lastIndex != storeEnd) {
         if (equal) {
             if (returnBounds) {
                 *startIndex = backend->getDateTimeMatch(server, backend->context, sessionId, sessionContext, nodeId, start, MATCH_EQUAL_OR_BEFORE);
@@ -61,7 +63,7 @@ getResultSize_service_default(const UA_HistoryDataBackend* backend,
                     size = 1;
             }
         } else if (start == LLONG_MIN) {
-            *endIndex = 0;
+            *endIndex = firstIndex;
             if (returnBounds) {
                 *addLast = true;
                 *startIndex = backend->getDateTimeMatch(server, backend->context, sessionId, sessionContext, nodeId, end, MATCH_EQUAL_OR_AFTER);
@@ -74,7 +76,7 @@ getResultSize_service_default(const UA_HistoryDataBackend* backend,
             }
             size = backend->resultSize(server, backend->context, sessionId, sessionContext, nodeId, *endIndex, *startIndex);
         } else if (end == LLONG_MIN) {
-            *endIndex = storeEnd - 1;
+            *endIndex = lastIndex;
             if (returnBounds) {
                 *addLast = true;
                 *startIndex = backend->getDateTimeMatch(server, backend->context, sessionId, sessionContext, nodeId, start, MATCH_EQUAL_OR_BEFORE);
@@ -283,10 +285,174 @@ getHistoryData_service_default(const UA_HistoryDataBackend* backend,
             return UA_STATUSCODE_BADOUTOFMEMORY;
         }
         *((size_t*)(outContinuationPoint->data)) = skip + *resultSize;
-        memcpy(outContinuationPoint->data + sizeof(size_t), backendOutContinuationPoint.data, backendOutContinuationPoint.length);
+        if(backendOutContinuationPoint.length > 0)
+            memcpy(outContinuationPoint->data + sizeof(size_t), backendOutContinuationPoint.data, backendOutContinuationPoint.length);
     }
     UA_ByteString_deleteMembers(&backendOutContinuationPoint);
     return UA_STATUSCODE_GOOD;
+}
+
+static void
+updateData_service_default(UA_Server *server,
+                           void *hdbContext,
+                           const UA_NodeId *sessionId,
+                           void *sessionContext,
+                           const UA_RequestHeader *requestHeader,
+                           const UA_UpdateDataDetails *details,
+                           UA_HistoryUpdateResult *result)
+{
+    UA_HistoryDatabaseContext_default *ctx = (UA_HistoryDatabaseContext_default*)hdbContext;
+    UA_Byte accessLevel = 0;
+    UA_Server_readAccessLevel(server,
+                              details->nodeId,
+                              &accessLevel);
+    if (!(accessLevel & UA_ACCESSLEVELMASK_HISTORYWRITE)) {
+        result->statusCode = UA_STATUSCODE_BADUSERACCESSDENIED;
+        return;
+    }
+
+    UA_Boolean historizing = false;
+    UA_Server_readHistorizing(server,
+                              details->nodeId,
+                              &historizing);
+    if (!historizing) {
+        result->statusCode = UA_STATUSCODE_BADHISTORYOPERATIONINVALID;
+        return;
+    }
+    const UA_HistorizingNodeIdSettings *setting = ctx->gathering.getHistorizingSetting(
+                server,
+                ctx->gathering.context,
+                &details->nodeId);
+
+    if (!setting) {
+        result->statusCode = UA_STATUSCODE_BADHISTORYOPERATIONINVALID;
+        return;
+    }
+
+    result->operationResultsSize = details->updateValuesSize;
+    result->operationResults = (UA_StatusCode*)UA_Array_new(result->operationResultsSize, &UA_TYPES[UA_TYPES_STATUSCODE]);
+    for (size_t i = 0; i < details->updateValuesSize; ++i) {
+        if (!UA_Server_AccessControl_allowHistoryUpdateUpdateData(server,
+                                                                  sessionId,
+                                                                  sessionContext,
+                                                                  &details->nodeId,
+                                                                  details->performInsertReplace,
+                                                                  &details->updateValues[i])) {
+            result->operationResults[i] = UA_STATUSCODE_BADUSERACCESSDENIED;
+            continue;
+        }
+        switch (details->performInsertReplace) {
+        case UA_PERFORMUPDATETYPE_INSERT:
+            if (!setting->historizingBackend.insertDataValue) {
+                result->operationResults[i] = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+                continue;
+            }
+            result->operationResults[i]
+                    = setting->historizingBackend.insertDataValue(server,
+                                                                  setting->historizingBackend.context,
+                                                                  sessionId,
+                                                                  sessionContext,
+                                                                  &details->nodeId,
+                                                                  &details->updateValues[i]);
+            continue;
+        case UA_PERFORMUPDATETYPE_REPLACE:
+            if (!setting->historizingBackend.replaceDataValue) {
+                result->operationResults[i] = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+                continue;
+            }
+            result->operationResults[i]
+                    = setting->historizingBackend.replaceDataValue(server,
+                                                                   setting->historizingBackend.context,
+                                                                   sessionId,
+                                                                   sessionContext,
+                                                                   &details->nodeId,
+                                                                   &details->updateValues[i]);
+            continue;
+        case UA_PERFORMUPDATETYPE_UPDATE:
+            if (!setting->historizingBackend.updateDataValue) {
+                result->operationResults[i] = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+                continue;
+            }
+            result->operationResults[i]
+                    = setting->historizingBackend.updateDataValue(server,
+                                                                  setting->historizingBackend.context,
+                                                                  sessionId,
+                                                                  sessionContext,
+                                                                  &details->nodeId,
+                                                                  &details->updateValues[i]);
+            continue;
+        default:
+            result->operationResults[i] = UA_STATUSCODE_BADHISTORYOPERATIONINVALID;
+            continue;
+        }
+    }
+}
+
+
+static void
+deleteRawModified_service_default(UA_Server *server,
+                                  void *hdbContext,
+                                  const UA_NodeId *sessionId,
+                                  void *sessionContext,
+                                  const UA_RequestHeader *requestHeader,
+                                  const UA_DeleteRawModifiedDetails *details,
+                                  UA_HistoryUpdateResult *result)
+{
+    if (details->isDeleteModified) {
+        result->statusCode = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+        return;
+    }
+    UA_HistoryDatabaseContext_default *ctx = (UA_HistoryDatabaseContext_default*)hdbContext;
+    UA_Byte accessLevel = 0;
+    UA_Server_readAccessLevel(server,
+                              details->nodeId,
+                              &accessLevel);
+    if (!(accessLevel & UA_ACCESSLEVELMASK_HISTORYWRITE)) {
+        result->statusCode = UA_STATUSCODE_BADUSERACCESSDENIED;
+        return;
+    }
+
+    UA_Boolean historizing = false;
+    UA_Server_readHistorizing(server,
+                              details->nodeId,
+                              &historizing);
+    if (!historizing) {
+        result->statusCode = UA_STATUSCODE_BADHISTORYOPERATIONINVALID;
+        return;
+    }
+    const UA_HistorizingNodeIdSettings *setting = ctx->gathering.getHistorizingSetting(
+                server,
+                ctx->gathering.context,
+                &details->nodeId);
+
+    if (!setting) {
+        result->statusCode = UA_STATUSCODE_BADHISTORYOPERATIONINVALID;
+        return;
+    }
+    if (!setting->historizingBackend.removeDataValue) {
+        result->statusCode = UA_STATUSCODE_BADHISTORYOPERATIONUNSUPPORTED;
+        return;
+    }
+
+    if (!UA_Server_AccessControl_allowHistoryUpdateDeleteRawModified(server,
+                                                                     sessionId,
+                                                                     sessionContext,
+                                                                     &details->nodeId,
+                                                                     details->startTime,
+                                                                     details->endTime,
+                                                                     details->isDeleteModified)) {
+        result->statusCode = UA_STATUSCODE_BADUSERACCESSDENIED;
+        return;
+    }
+
+    result->statusCode
+            = setting->historizingBackend.removeDataValue(server,
+                                                          setting->historizingBackend.context,
+                                                          sessionId,
+                                                          sessionContext,
+                                                          &details->nodeId,
+                                                          details->startTime,
+                                                          details->endTime);
 }
 
 static void
@@ -454,6 +620,8 @@ UA_HistoryDatabase_default(UA_HistoryDataGathering gathering)
     hdb.context = context;
     hdb.readRaw = &readRaw_service_default;
     hdb.setValue = &setValue_service_default;
+    hdb.updateData = &updateData_service_default;
+    hdb.deleteRawModified = &deleteRawModified_service_default;
     hdb.deleteMembers = &deleteMembers_service_default;
     return hdb;
 }

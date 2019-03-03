@@ -55,6 +55,22 @@ UA_StatusCode UA_EXPORT
 UA_parseEndpointUrlEthernet(const UA_String *endpointUrl, UA_String *target,
                             UA_UInt16 *vid, UA_Byte *pcp);
 
+/* Convert given byte string to a positive number. Returns the number of valid
+ * digits. Stops if a non-digit char is found and returns the number of digits
+ * up to that point. */
+size_t UA_readNumber(UA_Byte *buf, size_t buflen, UA_UInt32 *number);
+
+/* Same as UA_ReadNumber but with a base parameter */
+size_t UA_readNumberWithBase(UA_Byte *buf, size_t buflen, UA_UInt32 *number, UA_Byte base);
+
+#ifndef UA_MIN
+#define UA_MIN(A,B) (A > B ? B : A)
+#endif
+
+#ifndef UA_MAX
+#define UA_MAX(A,B) (A > B ? A : B)
+#endif
+
 /**
  * Convenience macros for complex types
  * ------------------------------------ */
@@ -91,6 +107,25 @@ UA_ByteString_toBase64String(const UA_ByteString *byteString, UA_String *str);
  */
 UA_StatusCode UA_EXPORT
 UA_NodeId_toString(const UA_NodeId *nodeId, UA_String *nodeIdStr);
+
+/*
+ * Compare memory in constant time to mitigate timing attacks.
+ *
+ * @return true if ptr1 and ptr2 are equal for length bytes.
+ */
+static UA_INLINE UA_Boolean
+UA_constantTimeEqual(const void *ptr1, const void *ptr2, size_t length) {
+    volatile const UA_Byte *a = (volatile const UA_Byte *)ptr1;
+    volatile const UA_Byte *b = (volatile const UA_Byte *)ptr2;
+    volatile UA_Byte c = 0;
+
+    for(size_t i = 0; i < length; ++i) {
+        UA_Byte x = a[i], y = b[i];
+        c |= x ^ y;
+    }
+
+    return !c;
+}
 
 _UA_END_DECLS
 

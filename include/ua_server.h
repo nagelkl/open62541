@@ -77,37 +77,57 @@ UA_StatusCode UA_EXPORT
 UA_Server_run_shutdown(UA_Server *server);
 
 /**
- * Repeated Callbacks
- * ------------------ */
+ * Timed Callbacks
+ * --------------- */
 typedef void (*UA_ServerCallback)(UA_Server *server, void *data);
+
+/* Add a callback for execution at a specified time. If the indicated time lies
+ * in the past, then the callback is executed at the next iteration of the
+ * server's main loop.
+ *
+ * @param server The server object.
+ * @param callback The callback that shall be added.
+ * @param data Data that is forwarded to the callback.
+ * @param date The timestamp for the execution time.
+ * @param callbackId Set to the identifier of the repeated callback . This can
+ *        be used to cancel the callback later on. If the pointer is null, the
+ *        identifier is not set.
+ * @return Upon success, UA_STATUSCODE_GOOD is returned. An error code
+ *         otherwise. */
+UA_StatusCode UA_EXPORT
+UA_Server_addTimedCallback(UA_Server *server, UA_ServerCallback callback,
+                           void *data, UA_DateTime date, UA_UInt64 *callbackId);
 
 /* Add a callback for cyclic repetition to the server.
  *
  * @param server The server object.
  * @param callback The callback that shall be added.
- * @param interval The callback shall be repeatedly executed with the given interval
- *        (in ms). The interval must be larger than 5ms. The first execution
+ * @param data Data that is forwarded to the callback.
+ * @param interval_ms The callback shall be repeatedly executed with the given
+ *        interval (in ms). The interval must be positive. The first execution
  *        occurs at now() + interval at the latest.
- * @param callbackId Set to the identifier of the repeated callback . This can be used to cancel
- *        the callback later on. If the pointer is null, the identifier is not set.
- * @return Upon success, UA_STATUSCODE_GOOD is returned.
- *         An error code otherwise. */
+ * @param callbackId Set to the identifier of the repeated callback . This can
+ *        be used to cancel the callback later on. If the pointer is null, the
+ *        identifier is not set.
+ * @return Upon success, UA_STATUSCODE_GOOD is returned. An error code
+ *         otherwise. */
 UA_StatusCode UA_EXPORT
 UA_Server_addRepeatedCallback(UA_Server *server, UA_ServerCallback callback,
-                              void *data, UA_UInt32 interval, UA_UInt64 *callbackId);
+                              void *data, UA_Double interval_ms, UA_UInt64 *callbackId);
 
 UA_StatusCode UA_EXPORT
 UA_Server_changeRepeatedCallbackInterval(UA_Server *server, UA_UInt64 callbackId,
-                                         UA_UInt32 interval);
+                                         UA_Double interval_ms);
 
-/* Remove a repeated callback.
+/* Remove a repeated callback. Does nothing if the callback is not found.
  *
  * @param server The server object.
- * @param callbackId The id of the callback that shall be removed.
- * @return Upon success, UA_STATUSCODE_GOOD is returned.
- *         An error code otherwise. */
-UA_StatusCode UA_EXPORT
-UA_Server_removeRepeatedCallback(UA_Server *server, UA_UInt64 callbackId);
+ * @param callbackId The id of the callback */
+void UA_EXPORT
+UA_Server_removeCallback(UA_Server *server, UA_UInt64 callbackId);
+
+#define UA_Server_removeRepeatedCallback(server, callbackId) \
+    UA_Server_removeCallback(server, callbackId);
 
 /**
  * Reading and Writing Node Attributes
@@ -384,7 +404,7 @@ UA_Server_writeValueRank(UA_Server *server, const UA_NodeId nodeId,
 static UA_INLINE UA_StatusCode
 UA_Server_writeArrayDimensions(UA_Server *server, const UA_NodeId nodeId,
                                const UA_Variant arrayDimensions) {
-    return __UA_Server_write(server, &nodeId, UA_ATTRIBUTEID_VALUE,
+    return __UA_Server_write(server, &nodeId, UA_ATTRIBUTEID_ARRAYDIMENSIONS,
                              &UA_TYPES[UA_TYPES_VARIANT], &arrayDimensions);
 }
 
@@ -516,8 +536,8 @@ UA_Server_unregister_discovery(UA_Server *server, struct UA_Client *client);
 UA_StatusCode UA_EXPORT
 UA_Server_addPeriodicServerRegisterCallback(UA_Server *server, struct UA_Client *client,
                                             const char* discoveryServerUrl,
-                                            UA_UInt32 intervalMs,
-                                            UA_UInt32 delayFirstRegisterMs,
+                                            UA_Double intervalMs,
+                                            UA_Double delayFirstRegisterMs,
                                             UA_UInt64 *periodicCallbackId);
 
 /* Callback for RegisterServer. Data is passed from the register call */
@@ -1212,7 +1232,7 @@ UA_Server_deleteReference(UA_Server *server, const UA_NodeId sourceNodeId,
  * The method ``UA_Server_triggerEvent`` "triggers" an event by adding it to all monitored items of the specified
  * origin node and those of all its parents. Any filters specified by the monitored items are automatically applied.
  * Using this method deletes the node generated by ``UA_Server_createEvent``. The `EventId` for the new event is
- * generated automatically and is returned through ``outEventId``.``NULL`` can be passed if the `EventId` is not
+ * generated automatically and is returned through ``outEventId``. ``NULL`` can be passed if the `EventId` is not
  * needed. ``deleteEventNode`` specifies whether the node representation of the event should be deleted after invoking
  * the method. This can be useful if events with the similar attributes are triggered frequently. ``UA_TRUE`` would
  * cause the node to be deleted. */
@@ -1270,6 +1290,23 @@ UA_Server_getConfig(UA_Server *server);
 UA_StatusCode UA_EXPORT
 UA_Server_getNamespaceByName(UA_Server *server, const UA_String namespaceUri,
                              size_t* foundIndex);
+
+#ifdef UA_ENABLE_HISTORIZING
+UA_Boolean UA_EXPORT
+UA_Server_AccessControl_allowHistoryUpdateUpdateData(UA_Server *server,
+                                                     const UA_NodeId *sessionId, void *sessionContext,
+                                                     const UA_NodeId *nodeId,
+                                                     UA_PerformUpdateType performInsertReplace,
+                                                     const UA_DataValue *value);
+
+UA_Boolean UA_EXPORT
+UA_Server_AccessControl_allowHistoryUpdateDeleteRawModified(UA_Server *server,
+                                                            const UA_NodeId *sessionId, void *sessionContext,
+                                                            const UA_NodeId *nodeId,
+                                                            UA_DateTime startTimestamp,
+                                                            UA_DateTime endTimestamp,
+                                                            bool isDeleteModified);
+#endif // UA_ENABLE_HISTORIZING
 
 _UA_END_DECLS
 

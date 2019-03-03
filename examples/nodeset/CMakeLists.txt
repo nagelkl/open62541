@@ -6,29 +6,74 @@
 # Custom XML      #
 ###################
 
+set(FILE_CSV_DIRPREFIX ${PROJECT_SOURCE_DIR}/nodeset)
+set(FILE_BSD_DIRPREFIX ${PROJECT_SOURCE_DIR}/nodeset)
+set(FILE_NS_DIRPREFIX ${PROJECT_SOURCE_DIR}/nodeset)
+
+if(NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    # needed or cmake doesn't recognize dependencies of generated files
+    set(PROJECT_BINARY_DIR ${CMAKE_BINARY_DIR})
+endif()
+
 # generate namespace from XML file
-ua_generate_nodeset_and_datatypes(
-    NAME "example"
-    FILE_NS "${PROJECT_SOURCE_DIR}/examples/nodeset/server_nodeset.xml"
-)
+if(NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    ua_generate_nodeset_and_datatypes(
+        NAME "example"
+        FILE_NS "${FILE_NS_DIRPREFIX}/server_nodeset.xml"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/schema/Opc.Ua.NodeSet2.Minimal.xml"
+    )
+else()
+    # standalone examples build expects already installed Opc.Ua.NodeSet2.Minimal.xml
+    ua_generate_nodeset_and_datatypes(
+        NAME "example"
+        FILE_NS "${FILE_NS_DIRPREFIX}/server_nodeset.xml"
+    )
+endif()
 
 # The .csv file can be created from within UaModeler or manually
+ua_generate_nodeid_header(
+    NAME "example_nodeids"
+    ID_PREFIX "EXAMPLE_NS"
+    TARGET_SUFFIX "ids_example"
+    FILE_CSV "${FILE_CSV_DIRPREFIX}/server_nodeset.csv"
+)
 
-add_custom_command(OUTPUT ${PROJECT_BINARY_DIR}/src_generated/example_nodeset_ids.h
-                   PRE_BUILD
-                   COMMAND ${PYTHON_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/generate_nodeid_header.py
-                   ${PROJECT_SOURCE_DIR}/examples/nodeset/server_nodeset.csv  ${PROJECT_BINARY_DIR}/src_generated/example_nodeset_ids EXAMPLE_NS
-                   DEPENDS ${PROJECT_SOURCE_DIR}/tools/generate_nodeid_header.py
-                   ${PROJECT_SOURCE_DIR}/examples/nodeset/server_nodeset.csv)
-
-add_example(server_nodeset server_nodeset.c ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_example.c ${PROJECT_BINARY_DIR}/src_generated/example_nodeset_ids.h)
+add_example(server_nodeset server_nodeset.c ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_example.c ${PROJECT_BINARY_DIR}/src_generated/example_nodeids.h)
 if(UA_COMPILE_AS_CXX)
     set_source_files_properties(${PROJECT_BINARY_DIR}/src_generated/ua_namespace_example.c PROPERTIES LANGUAGE CXX)
 endif()
 
+if(UA_NAMESPACE_ZERO STREQUAL "FULL")
+    ua_generate_nodeset_and_datatypes(
+        NAME "testnodeset"
+        FILE_CSV "${FILE_CSV_DIRPREFIX}/testnodeset.csv"
+        FILE_BSD "${FILE_BSD_DIRPREFIX}/testtypes.bsd"
+        NAMESPACE_IDX 2
+        FILE_NS "${FILE_NS_DIRPREFIX}/testnodeset.xml"
+        INTERNAL
+    )
+    add_example(server_testnodeset server_testnodeset.c 
+        ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_testnodeset.c
+        ${PROJECT_BINARY_DIR}/src_generated/ua_types_testnodeset_generated.c)
+    add_dependencies(server_testnodeset open62541-generator-ns-testnodeset)
+endif()
+
+
 ###################
 # PLCopen Nodeset #
 ###################
+
+if(NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    set(FILE_CSV_DIRPREFIX ${CMAKE_SOURCE_DIR}/deps/ua-nodeset)
+    set(FILE_BSD_PLCOPEN_DIRPREFIX ${CMAKE_SOURCE_DIR}/deps/ua-nodeset)
+    set(FILE_BSD_POWERLINK_DIRPREFIX ${PROJECT_SOURCE_DIR}/nodeset)
+    set(FILE_NS_DIRPREFIX ${CMAKE_SOURCE_DIR}/deps/ua-nodeset)
+else()
+    set(FILE_CSV_DIRPREFIX ${UA_TOOLS_DIR}/ua-nodeset)
+    set(FILE_BSD_PLCOPEN_DIRPREFIX ${UA_TOOLS_DIR}/ua-nodeset)
+    set(FILE_BSD_POWERLINK_DIRPREFIX ${PROJECT_SOURCE_DIR}/nodeset)
+    set(FILE_NS_DIRPREFIX ${UA_TOOLS_DIR}/ua-nodeset)
+endif()
 
 # PLCopen requires the full ns0 as basis
 if(UA_NAMESPACE_ZERO STREQUAL "FULL")
@@ -36,10 +81,10 @@ if(UA_NAMESPACE_ZERO STREQUAL "FULL")
     # Generate types and namespace for DI
     ua_generate_nodeset_and_datatypes(
         NAME "di"
-        FILE_CSV "${PROJECT_SOURCE_DIR}/deps/ua-nodeset/DI/OpcUaDiModel.csv"
-        FILE_BSD "${PROJECT_SOURCE_DIR}/deps/ua-nodeset/DI/Opc.Ua.Di.Types.bsd"
+        FILE_CSV "${FILE_CSV_DIRPREFIX}/DI/OpcUaDiModel.csv"
+        FILE_BSD "${FILE_BSD_PLCOPEN_DIRPREFIX}/DI/Opc.Ua.Di.Types.bsd"
         NAMESPACE_IDX 2
-        FILE_NS "${PROJECT_SOURCE_DIR}/deps/ua-nodeset/DI/Opc.Ua.Di.NodeSet2.xml"
+        FILE_NS "${FILE_NS_DIRPREFIX}/DI/Opc.Ua.Di.NodeSet2.xml"
         INTERNAL
     )
 
@@ -47,7 +92,7 @@ if(UA_NAMESPACE_ZERO STREQUAL "FULL")
     ua_generate_nodeset_and_datatypes(
         NAME "plc"
         # PLCopen does not define custom types. Only generate the nodeset
-        FILE_NS "${PROJECT_SOURCE_DIR}/deps/ua-nodeset/PLCopen/Opc.Ua.Plc.NodeSet2.xml"
+        FILE_NS "${FILE_NS_DIRPREFIX}/PLCopen/Opc.Ua.Plc.NodeSet2.xml"
         # PLCopen depends on the di nodeset, which must be generated before
         DEPENDS "di"
         INTERNAL
@@ -58,6 +103,31 @@ if(UA_NAMESPACE_ZERO STREQUAL "FULL")
                 ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_di.c
                 ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_plc.c)
     add_dependencies(server_nodeset_plcopen open62541-generator-ns-plc)
-    target_include_directories(server_nodeset_plcopen PRIVATE ${PROJECT_SOURCE_DIR}/src) # needs an internal header
+    
+
+endif()
+
+# POWERLINK requires the full ns0 as basis
+
+if(UA_NAMESPACE_ZERO STREQUAL "FULL")
+
+    # generate powerlink namespace which is using DI
+    ua_generate_nodeset_and_datatypes(
+        NAME "powerlink"
+        FILE_CSV "${FILE_CSV_DIRPREFIX}/POWERLINK/Opc.Ua.POWERLINK.NodeIds.csv"
+        FILE_BSD "${FILE_BSD_POWERLINK_DIRPREFIX}/Opc.Ua.POWERLINK.NodeSet2.bsd"
+        NAMESPACE_IDX 3
+        FILE_NS "${FILE_NS_DIRPREFIX}/POWERLINK/Opc.Ua.POWERLINK.NodeSet2.xml"
+        # POWERLINK depends on the di nodeset, which must be generated before
+        DEPENDS "di"
+        INTERNAL
+    )
+
+    add_example(server_nodeset_powerlink server_nodeset_powerlink.c
+                ${PROJECT_BINARY_DIR}/src_generated/ua_types_di_generated.c
+                ${PROJECT_BINARY_DIR}/src_generated/ua_types_powerlink_generated.c
+                ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_di.c
+                ${PROJECT_BINARY_DIR}/src_generated/ua_namespace_powerlink.c)
+    add_dependencies(server_nodeset_powerlink open62541-generator-ns-powerlink)
 
 endif()

@@ -55,7 +55,10 @@
  * setting constraints on the variable values as this is not the focus of this
  * tutorial and was already covered. */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+
 #include <signal.h>
 
 static void
@@ -288,7 +291,7 @@ pumpTypeConstructor(UA_Server *server,
     UA_Variant value;
     UA_Variant_setScalar(&value, &status, &UA_TYPES[UA_TYPES_BOOLEAN]);
     UA_Server_writeValue(server, bpr.targets[0].targetId.nodeId, value);
-    UA_BrowsePathResult_deleteMembers(&bpr);
+    UA_BrowsePathResult_clear(&bpr);
 
     /* At this point we could replace the node context .. */
 
@@ -329,5 +332,5 @@ int main(void) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

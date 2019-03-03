@@ -10,7 +10,10 @@
 #ifndef PLUGINS_ARCH_VXWORKS_UA_ARCHITECTURE_H_
 #define PLUGINS_ARCH_VXWORKS_UA_ARCHITECTURE_H_
 
+#include "ua_architecture_base.h"
+
 #include <errno.h>
+#include <time.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -105,48 +108,7 @@
     LOG; \
 }
 
-#include "../ua_architecture_functions.h"
-
-#undef SLIST_EMPTY
-#undef SLIST_FOREACH
-#undef SLIST_INIT
-#undef SLIST_REMOVE
-
-#undef LIST_EMPTY
-#undef LIST_FOREACH
-#undef LIST_INIT
-#undef LIST_REMOVE
-
-#undef TAILQ_EMPTY
-#undef TAILQ_FOREACH
-#undef TAILQ_INIT
-#undef TAILQ_REMOVE
-#undef TAILQ_FOREACH_REVERSE
-
-#undef CIRCLEQ_EMPTY
-#undef CIRCLEQ_FOREACH
-#undef CIRCLEQ_INIT
-#undef CIRCLEQ_FOREACH_REVERSE
-#undef CIRCLEQ_REMOVE
-#undef CIRCLEQ_INSERT_TAIL
-#undef CIRCLEQ_INSERT_HEAD
-#undef CIRCLEQ_INSERT_AFTER
-#undef CIRCLEQ_INSERT_BEFORE
-
-#undef SLIST_INSERT_AFTER
-#undef SLIST_INSERT_HEAD
-#undef SLIST_REMOVE_HEAD
-#undef LIST_INSERT_AFTER
-#undef LIST_INSERT_BEFORE
-#undef LIST_INSERT_HEAD
-#undef TAILQ_INSERT_HEAD
-#undef TAILQ_INSERT_TAIL
-#undef TAILQ_INSERT_AFTER
-#undef TAILQ_INSERT_BEFORE
-#undef CIRCLEQ_HEAD_INITIALIZER
-
-
-#undef _SYS_QUEUE_H_
+#include "ua_architecture_functions.h"
 
 #endif /* PLUGINS_ARCH_VXWORKS_UA_ARCHITECTURE_H_ */
 

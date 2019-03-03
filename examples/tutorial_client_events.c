@@ -1,7 +1,11 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include "open62541.h"
+#include <ua_client_highlevel.h>
+#include <ua_config_default.h>
+#include <ua_log_stdout.h>
+#include <ua_client_subscriptions.h>
+
 #include <signal.h>
 
 #ifdef _MSC_VER
@@ -78,7 +82,6 @@ setupSelectClauses(void) {
     selectClauses[1].browsePath = (UA_QualifiedName*)
         UA_Array_new(selectClauses[1].browsePathSize, &UA_TYPES[UA_TYPES_QUALIFIEDNAME]);
     if(!selectClauses[1].browsePath) {
-        UA_SimpleAttributeOperand_deleteMembers(selectClauses);
         UA_SimpleAttributeOperand_delete(selectClauses);
         return NULL;
     }
@@ -96,17 +99,18 @@ int main(int argc, char *argv[]) {
 
     if(argc < 2) {
         printf("Usage: tutorial_client_events <opc.tcp://server-url>\n");
-        return 1;
+        return EXIT_FAILURE;
     }
 
-    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
 
     /* opc.tcp://uademo.prosysopc.com:53530/OPCUA/SimulationServer */
     /* opc.tcp://opcua.demo-this.com:51210/UA/SampleServer */
     UA_StatusCode retval = UA_Client_connect(client, argv[1]);
     if(retval != UA_STATUSCODE_GOOD) {
         UA_Client_delete(client);
-        return (int)retval;
+        return EXIT_FAILURE;
     }
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
@@ -117,7 +121,7 @@ int main(int argc, char *argv[]) {
     if(response.responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
         UA_Client_disconnect(client);
         UA_Client_delete(client);
-        return (int)retval;
+        return EXIT_FAILURE;
     }
     UA_UInt32 subId = response.subscriptionId;
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Create subscription succeeded, id %u", subId);
@@ -157,16 +161,16 @@ int main(int argc, char *argv[]) {
     monId = result.monitoredItemId;
 
     while(running)
-        UA_Client_run_iterate(client, 100);
+        retval = UA_Client_run_iterate(client, 100);
 
     /* Delete the subscription */
  cleanup:
-    UA_MonitoredItemCreateResult_deleteMembers(&result);
+    UA_MonitoredItemCreateResult_clear(&result);
     UA_Client_Subscriptions_deleteSingle(client, response.subscriptionId);
     UA_Array_delete(filter.selectClauses, nSelectClauses, &UA_TYPES[UA_TYPES_SIMPLEATTRIBUTEOPERAND]);
 #endif
 
     UA_Client_disconnect(client);
     UA_Client_delete(client);
-    return (int) retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

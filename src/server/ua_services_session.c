@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. 
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2014-2017 (c) Florian Palm
@@ -9,6 +9,7 @@
  *    Copyright 2015 (c) Oleksiy Vasylyev
  *    Copyright 2017 (c) Stefan Profanter, fortiss GmbH
  *    Copyright 2017-2018 (c) Mark Giraud, Fraunhofer IOSB
+ *    Copyright 2019 (c) Kalycito Infotech Private Limited
  */
 
 #include "ua_services.h"
@@ -69,14 +70,14 @@ Service_CreateSession(UA_Server *server, UA_SecureChannel *channel,
         return;
     }
 
-    UA_LOG_DEBUG_CHANNEL(server->config.logger, channel, "Trying to create session");
+    UA_LOG_DEBUG_CHANNEL(&server->config.logger, channel, "Trying to create session");
 
     if(channel->securityMode == UA_MESSAGESECURITYMODE_SIGN ||
        channel->securityMode == UA_MESSAGESECURITYMODE_SIGNANDENCRYPT) {
         /* Compare the clientCertificate with the remoteCertificate of the channel.
          * Both the clientCertificate of this request and the remoteCertificate
          * of the channel may contain a partial or a complete certificate chain.
-         * The compareCertificate function of the channelModule will compare the 
+         * The compareCertificate function of the channelModule will compare the
          * first certificate of each chain. The end certificate shall be located
          * first in the chain according to the OPC UA specification Part 6 (1.04),
          * chapter 6.2.3.*/
@@ -113,7 +114,7 @@ Service_CreateSession(UA_Server *server, UA_SecureChannel *channel,
     response->responseHeader.serviceResult =
         UA_SessionManager_createSession(&server->sessionManager, channel, request, &newSession);
     if(response->responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
-        UA_LOG_DEBUG_CHANNEL(server->config.logger, channel,
+        UA_LOG_DEBUG_CHANNEL(&server->config.logger, channel,
                              "Processing CreateSessionRequest failed");
         return;
     }
@@ -135,7 +136,7 @@ Service_CreateSession(UA_Server *server, UA_SecureChannel *channel,
     /* Copy the server's endpointdescriptions into the response */
     for(size_t i = 0; i < server->config.endpointsSize; ++i)
         response->responseHeader.serviceResult |=
-            UA_EndpointDescription_copy(&server->config.endpoints[i].endpointDescription,
+            UA_EndpointDescription_copy(&server->config.endpoints[i],
                                         &response->serverEndpoints[i]);
     if(response->responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
         UA_SessionManager_removeSession(&server->sessionManager,
@@ -201,7 +202,7 @@ Service_CreateSession(UA_Server *server, UA_SecureChannel *channel,
         return;
     }
 
-    UA_LOG_DEBUG_CHANNEL(server->config.logger, channel,
+    UA_LOG_DEBUG_CHANNEL(&server->config.logger, channel,
                          "Session " UA_PRINTF_GUID_FORMAT " created",
                          UA_PRINTF_GUID_DATA(newSession->sessionId.identifier.guid));
 }
@@ -252,10 +253,10 @@ void
 Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
                         UA_Session *session, const UA_ActivateSessionRequest *request,
                         UA_ActivateSessionResponse *response) {
-    UA_LOG_DEBUG_SESSION(server->config.logger, session, "Execute ActivateSession");
+    UA_LOG_DEBUG_SESSION(&server->config.logger, session, "Execute ActivateSession");
 
     if(session->validTill < UA_DateTime_nowMonotonic()) {
-        UA_LOG_INFO_SESSION(server->config.logger, session,
+        UA_LOG_INFO_SESSION(&server->config.logger, session,
                             "ActivateSession: SecureChannel %i wants "
                             "to activate, but the session has timed out",
                             channel->securityToken.channelId);
@@ -268,7 +269,7 @@ Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
      * to the client */
     response->responseHeader.serviceResult = checkSignature(server, channel, session, request);
     if(response->responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
-        UA_LOG_INFO_SESSION(server->config.logger, session,
+        UA_LOG_INFO_SESSION(&server->config.logger, session,
                             "Signature check failed with status code %s",
                             UA_StatusCode_name(response->responseHeader.serviceResult));
         return;
@@ -277,20 +278,20 @@ Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
     /* Find the matching endpoint */
     const UA_EndpointDescription *ed = NULL;
     for(size_t i = 0; ed == NULL && i < server->config.endpointsSize; ++i) {
-        const UA_Endpoint *e = &server->config.endpoints[i];
+        const UA_EndpointDescription *e = &server->config.endpoints[i];
 
         /* Match the Security Mode */
-        if(e->endpointDescription.securityMode != channel->securityMode)
+        if(e->securityMode != channel->securityMode)
             continue;
 
         /* Match the SecurityPolicy */
-        if(!UA_String_equal(&e->securityPolicy.policyUri,
+        if(!UA_String_equal(&e->securityPolicyUri,
                             &channel->securityPolicy->policyUri))
             continue;
 
         /* Match the UserTokenType */
-        for(size_t j = 0; j < e->endpointDescription.userIdentityTokensSize; j++) {
-            const UA_UserTokenPolicy *u = &e->endpointDescription.userIdentityTokens[j];
+        for(size_t j = 0; j < e->userIdentityTokensSize; j++) {
+            const UA_UserTokenPolicy *u = &e->userIdentityTokens[j];
             if(u->tokenType == UA_USERTOKENTYPE_ANONYMOUS) {
                 if(request->userIdentityToken.content.decoded.type != &UA_TYPES[UA_TYPES_ANONYMOUSIDENTITYTOKEN])
                     continue;
@@ -309,7 +310,7 @@ Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
             }
 
             /* Match found */
-            ed = &e->endpointDescription;
+            ed = e;
             break;
         }
 
@@ -317,7 +318,7 @@ Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
 
     /* No matching endpoint found */
     if(!ed) {
-        response->responseHeader.serviceResult = UA_STATUSCODE_BADIDENTITYTOKENREJECTED;
+        response->responseHeader.serviceResult = UA_STATUSCODE_BADIDENTITYTOKENINVALID;
         return;
     }
 
@@ -329,13 +330,15 @@ Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
                                                      &request->userIdentityToken,
                                                      &session->sessionHandle);
     if(response->responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
-        UA_LOG_INFO_SESSION(server->config.logger, session,
-                            "ActivateSession: Could not generate a server nonce");
+        UA_LOG_INFO_SESSION(&server->config.logger, session,
+                            "ActivateSession: The AccessControl plugin "
+                            "denied the access with the status code %s",
+                            UA_StatusCode_name(response->responseHeader.serviceResult));
         return;
     }
 
     if(session->header.channel && session->header.channel != channel) {
-        UA_LOG_INFO_SESSION(server->config.logger, session,
+        UA_LOG_INFO_SESSION(&server->config.logger, session,
                             "ActivateSession: Detach from old channel");
         /* Detach the old SecureChannel and attach the new */
         UA_Session_detachFromSecureChannel(session);
@@ -353,12 +356,12 @@ Service_ActivateSession(UA_Server *server, UA_SecureChannel *channel,
     if(response->responseHeader.serviceResult != UA_STATUSCODE_GOOD) {
         UA_Session_detachFromSecureChannel(session);
         session->activated = false;
-        UA_LOG_INFO_SESSION(server->config.logger, session,
+        UA_LOG_INFO_SESSION(&server->config.logger, session,
                             "ActivateSession: Could not generate a server nonce");
         return;
     }
 
-    UA_LOG_INFO_SESSION(server->config.logger, session,
+    UA_LOG_INFO_SESSION(&server->config.logger, session,
                         "ActivateSession: Session activated");
 }
 
@@ -366,7 +369,7 @@ void
 Service_CloseSession(UA_Server *server, UA_Session *session,
                      const UA_CloseSessionRequest *request,
                      UA_CloseSessionResponse *response) {
-    UA_LOG_INFO_SESSION(server->config.logger, session, "CloseSession");
+    UA_LOG_INFO_SESSION(&server->config.logger, session, "CloseSession");
 
     /* Callback into userland access control */
     server->config.accessControl.closeSession(server, &server->config.accessControl,

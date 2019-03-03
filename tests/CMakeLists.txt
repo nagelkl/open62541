@@ -9,17 +9,23 @@ endif()
 
 if(CMAKE_HOST_SYSTEM_NAME MATCHES "OpenBSD")
     link_directories(/usr/local/lib)
+    add_definitions(-Wno-gnu-zero-variadic-macro-arguments)
 endif()
 
-include_directories(${PROJECT_SOURCE_DIR}/include)
-include_directories(${PROJECT_SOURCE_DIR}/deps)
-include_directories(${PROJECT_SOURCE_DIR}/src)
-include_directories(${PROJECT_SOURCE_DIR}/src/server)
-include_directories(${PROJECT_SOURCE_DIR}/src/pubsub)
-include_directories(${PROJECT_SOURCE_DIR}/plugins)
-include_directories(${PROJECT_SOURCE_DIR}/plugins/historydata)
-include_directories(${PROJECT_BINARY_DIR}/src_generated)
-include_directories(${PROJECT_SOURCE_DIR}/tests/testing-plugins)
+get_property(open62541_BUILD_INCLUDE_DIRS TARGET open62541 PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
+include_directories(${open62541_BUILD_INCLUDE_DIRS})
+# ua_server_internal.h
+include_directories("${PROJECT_SOURCE_DIR}/src")
+include_directories("${PROJECT_SOURCE_DIR}/src/server")
+# testing_clock.h
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/testing-plugins")
+# #include <src_generated/<...>.h>
+include_directories("${PROJECT_BINARY_DIR}")
+
+if(UA_ENABLE_ENCRYPTION)
+    # mbedtls includes
+    include_directories(${MBEDTLS_INCLUDE_DIRS})
+endif()
 
 add_definitions(-DUA_sleep_ms=UA_comboSleep)
 
@@ -43,20 +49,23 @@ set(test_plugin_sources ${PROJECT_SOURCE_DIR}/arch/ua_network_tcp.c
                         ${PROJECT_SOURCE_DIR}/plugins/ua_accesscontrol_default.c
                         ${PROJECT_SOURCE_DIR}/plugins/ua_pki_certificate.c
                         ${PROJECT_SOURCE_DIR}/plugins/ua_nodestore_default.c
-                        ${PROJECT_SOURCE_DIR}/tests/testing-plugins/testing_clock.c
-                        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabackend_memory.c
-                        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatagathering_default.c
-                        ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabase_default.c
-                        ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_none.c
+                        ${PROJECT_SOURCE_DIR}/plugins/securityPolicies/ua_securitypolicy_none.c
                         ${PROJECT_SOURCE_DIR}/tests/testing-plugins/testing_policy.c
                         ${PROJECT_SOURCE_DIR}/tests/testing-plugins/testing_networklayers.c
 )
 
+if(UA_ENABLE_HISTORIZING)
+    set(test_plugin_sources ${test_plugin_sources}
+                            ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabackend_memory.c
+                            ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatagathering_default.c
+                            ${PROJECT_SOURCE_DIR}/plugins/historydata/ua_historydatabase_default.c)
+endif()
+
 if(UA_ENABLE_ENCRYPTION)
     set(test_plugin_sources ${test_plugin_sources}
-        ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_basic128rsa15.c)
+        ${PROJECT_SOURCE_DIR}/plugins/securityPolicies/ua_securitypolicy_basic128rsa15.c)
     set(test_plugin_sources ${test_plugin_sources}
-        ${PROJECT_SOURCE_DIR}/plugins/ua_securitypolicy_basic256sha256.c)
+        ${PROJECT_SOURCE_DIR}/plugins/securityPolicies/ua_securitypolicy_basic256sha256.c)
 endif()
 
 add_library(open62541-testplugins OBJECT ${test_plugin_sources} ${PROJECT_SOURCE_DIR}/arch/${UA_ARCHITECTURE}/ua_architecture_functions.c)
@@ -103,6 +112,22 @@ add_executable(check_types_builtin check_types_builtin.c $<TARGET_OBJECTS:open62
 target_link_libraries(check_types_builtin ${LIBS})
 add_test_valgrind(types_builtin ${TESTS_BINARY_DIR}/check_types_builtin)
 
+if(UA_ENABLE_JSON_ENCODING)
+    add_executable(check_types_builtin_json check_types_builtin_json.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+    target_link_libraries(check_types_builtin_json ${LIBS})
+    add_test_valgrind(types_builtin_json ${TESTS_BINARY_DIR}/check_types_builtin_json)
+
+    if(UA_ENABLE_PUBSUB)
+        add_executable(check_pubsub_encoding_json pubsub/check_pubsub_encoding_json.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+        target_link_libraries(check_pubsub_encoding_json ${LIBS})
+        add_test_valgrind(pubsub_encoding_json ${TESTS_BINARY_DIR}/check_pubsub_encoding_json)
+
+        add_executable(check_pubsub_publish_json pubsub/check_pubsub_publish_json.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-plugins>)
+        target_link_libraries(check_pubsub_publish_json ${LIBS})
+        add_test_valgrind(pubsub_publish_json ${TESTS_BINARY_DIR}/check_pubsub_publish_json)
+    endif()
+endif()
+
 add_executable(check_types_memory check_types_memory.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
 target_link_libraries(check_types_memory ${LIBS})
 add_test_valgrind(types_memory ${TESTS_BINARY_DIR}/check_types_memory)
@@ -127,6 +152,10 @@ add_executable(check_securechannel check_securechannel.c $<TARGET_OBJECTS:open62
 target_link_libraries(check_securechannel ${LIBS})
 add_test_valgrind(securechannel ${TESTS_BINARY_DIR}/check_securechannel)
 
+add_executable(check_timer check_timer.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+target_link_libraries(check_timer ${LIBS})
+add_test_valgrind(timer ${TESTS_BINARY_DIR}/check_timer)
+
 # Test Server
 
 add_executable(check_accesscontrol server/check_accesscontrol.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
@@ -145,6 +174,10 @@ add_executable(check_services_nodemanagement server/check_services_nodemanagemen
 target_link_libraries(check_services_nodemanagement ${LIBS})
 add_test_valgrind(services_nodemanagement ${TESTS_BINARY_DIR}/check_services_nodemanagement)
 
+add_executable(check_services_call server/check_services_call.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+target_link_libraries(check_services_call ${LIBS})
+add_test_valgrind(services_call ${TESTS_BINARY_DIR}/check_services_call)
+
 add_executable(check_services_subscriptions server/check_services_subscriptions.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
 target_link_libraries(check_services_subscriptions ${LIBS})
 add_test_valgrind(services_subscriptions ${TESTS_BINARY_DIR}/check_services_subscriptions)
@@ -161,9 +194,11 @@ add_executable(check_nodestore server/check_nodestore.c $<TARGET_OBJECTS:open625
 target_link_libraries(check_nodestore ${LIBS})
 add_test_valgrind(nodestore ${TESTS_BINARY_DIR}/check_nodestore)
 
-add_executable(check_historical_data server/check_historical_data.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
-target_link_libraries(check_historical_data ${LIBS})
-add_test_valgrind(historical_data ${TESTS_BINARY_DIR}/check_historical_data)
+if(UA_ENABLE_HISTORIZING)
+    add_executable(check_server_historical_data server/check_server_historical_data.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+    target_link_libraries(check_server_historical_data ${LIBS})
+    add_test_valgrind(server_historical_data ${TESTS_BINARY_DIR}/check_server_historical_data)
+endif()
 
 add_executable(check_session server/check_session.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
 target_link_libraries(check_session ${LIBS})
@@ -217,6 +252,12 @@ if(UA_ENABLE_PUBSUB)
         add_executable(check_pubsub_informationmodel pubsub/check_pubsub_informationmodel.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-plugins>)
         target_link_libraries(check_pubsub_informationmodel ${LIBS})
         add_test(check_pubsub_informationmodel ${TESTS_BINARY_DIR}/check_pubsub_informationmodel)
+        if(UA_ENABLE_PUBSUB_INFORMATIONMODEL_METHODS)
+            add_executable(check_pubsub_informationmodel_methods pubsub/check_pubsub_informationmodel_methods.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-plugins>)
+            target_link_libraries(check_pubsub_informationmodel_methods ${LIBS})
+            add_test(check_pubsub_informationmodel_methods ${TESTS_BINARY_DIR}/check_pubsub_informationmodel_methods)
+
+        endif()
     endif()
 endif()
 
@@ -255,6 +296,12 @@ add_test_valgrind(client_subscriptions ${TESTS_BINARY_DIR}/check_client_subscrip
 add_executable(check_client_highlevel client/check_client_highlevel.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
 target_link_libraries(check_client_highlevel ${LIBS})
 add_test_valgrind(client_highlevel ${TESTS_BINARY_DIR}/check_client_highlevel)
+
+if(UA_ENABLE_HISTORIZING)
+    add_executable(check_client_historical_data client/check_client_historical_data.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+    target_link_libraries(check_client_historical_data ${LIBS})
+    add_test_valgrind(client_historical_data ${TESTS_BINARY_DIR}/check_client_historical_data)
+endif()
 
 # Test Encryption
 

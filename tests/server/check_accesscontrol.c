@@ -14,19 +14,18 @@
 
 UA_Server *server;
 UA_ServerConfig *config;
-UA_Boolean *running;
+UA_Boolean running;
 UA_ServerNetworkLayer nl;
 THREAD_HANDLE server_thread;
 
 THREAD_CALLBACK(serverloop) {
-    while(*running)
+    while(running)
         UA_Server_run_iterate(server, true);
     return 0;
 }
 
 static void setup(void) {
-    running = UA_Boolean_new();
-    *running = true;
+    running = true;
     config = UA_ServerConfig_new_default();
     server = UA_Server_new(config);
     UA_Server_run_startup(server);
@@ -34,57 +33,59 @@ static void setup(void) {
 }
 
 static void teardown(void) {
-    *running = false;
+    running = false;
     THREAD_JOIN(server_thread);
     UA_Server_run_shutdown(server);
-    UA_Boolean_delete(running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
 }
 
 START_TEST(Client_anonymous) {
-        UA_Client *client = UA_Client_new(UA_ClientConfig_default);
-        UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+    UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
 
-        ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
-        UA_Client_disconnect(client);
-        UA_Client_delete(client);
-    }
-END_TEST
+    UA_Client_disconnect(client);
+    UA_Client_delete(client);
+} END_TEST
 
 START_TEST(Client_user_pass_ok) {
-        UA_Client *client = UA_Client_new(UA_ClientConfig_default);
-        UA_StatusCode retval = UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user1", "password");
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+    UA_StatusCode retval =
+        UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user1", "password");
 
-        ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
-        UA_Client_disconnect(client);
-        UA_Client_delete(client);
-    }
-END_TEST
+    UA_Client_disconnect(client);
+    UA_Client_delete(client);
+} END_TEST
 
 START_TEST(Client_user_fail) {
-        UA_Client *client = UA_Client_new(UA_ClientConfig_default);
-        UA_StatusCode retval = UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user0", "password");
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+    UA_StatusCode retval =
+        UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user0", "password");
 
-        ck_assert_uint_eq(retval, UA_STATUSCODE_BADUSERACCESSDENIED);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_BADUSERACCESSDENIED);
 
-        UA_Client_disconnect(client);
-        UA_Client_delete(client);
-    }
-END_TEST
+    UA_Client_disconnect(client);
+    UA_Client_delete(client);
+} END_TEST
 
 START_TEST(Client_pass_fail) {
-        UA_Client *client = UA_Client_new(UA_ClientConfig_default);
-        UA_StatusCode retval = UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user1", "secret");
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+    UA_StatusCode retval =
+        UA_Client_connect_username(client, "opc.tcp://localhost:4840", "user1", "secret");
 
-        ck_assert_uint_eq(retval, UA_STATUSCODE_BADUSERACCESSDENIED);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_BADUSERACCESSDENIED);
 
-        UA_Client_disconnect(client);
-        UA_Client_delete(client);
-    }
-END_TEST
+    UA_Client_disconnect(client);
+    UA_Client_delete(client);
+} END_TEST
 
 
 static Suite* testSuite_Client(void) {

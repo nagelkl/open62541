@@ -6,8 +6,11 @@
  * find servers service to get all registered servers (see client_find_servers.c).
  */
 
-#include "open62541.h"
+#include <ua_server.h>
+#include <ua_config_default.h>
+
 #include <signal.h>
+#include <stdlib.h>
 
 UA_Boolean running = true;
 static void stopHandler(int sig) {
@@ -20,7 +23,7 @@ int main(void) {
 
     UA_ServerConfig *config = UA_ServerConfig_new_default();
     config->applicationDescription.applicationType = UA_APPLICATIONTYPE_DISCOVERYSERVER;
-    UA_String_deleteMembers(&config->applicationDescription.applicationUri);
+    UA_String_clear(&config->applicationDescription.applicationUri);
     config->applicationDescription.applicationUri =
             UA_String_fromChars("urn:open62541.example.local_discovery_server");
     config->mdnsServerName = UA_String_fromChars("LDS");
@@ -33,7 +36,7 @@ int main(void) {
      * the list, if it doesn't re-register within the given time frame. A value
      * of 0 disables automatic removal. Default is 60 Minutes (60*60). Must be
      * bigger than 10 seconds, because cleanup is only triggered approximately
-     * ervery 10 seconds. The server will still be removed depending on the
+     * every 10 seconds. The server will still be removed depending on the
      * state of the semaphore file. */
     // config.discoveryCleanupTimeout = 60*60;
     UA_Server *server = UA_Server_new(config);
@@ -41,5 +44,5 @@ int main(void) {
     UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     UA_ServerConfig_delete(config);
-    return (int)retval;
+    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }
