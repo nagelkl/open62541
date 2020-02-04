@@ -2,16 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include <open62541/server_config_default.h>
+
+#include "server/ua_server_internal.h"
+#include "server/ua_services.h"
+
+#include <check.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-
-#include "check.h"
-#include "server/ua_services.h"
-#include "ua_client.h"
-#include "ua_types.h"
-#include "ua_config_default.h"
-#include "server/ua_server_internal.h"
 
 #ifdef __clang__
 //required for ck_assert_ptr_eq and const casting
@@ -20,7 +19,6 @@
 #endif
 
 static UA_Server *server = NULL;
-static UA_ServerConfig *config = NULL;
 
 static UA_StatusCode
 readCPUTemperature(UA_Server *server_,
@@ -36,12 +34,11 @@ readCPUTemperature(UA_Server *server_,
 
 static void teardown(void) {
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
 }
 
 static void setup(void) {
-    config = UA_ServerConfig_new_default();
-    server = UA_Server_new(config);
+    server = UA_Server_new();
+    UA_ServerConfig_setDefault(UA_Server_getConfig(server));
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
     /* VariableNode */
@@ -131,13 +128,21 @@ static void setup(void) {
                                    UA_QUALIFIEDNAME(0, "Viewtest"), view_attr, NULL, NULL);
     ck_assert_int_eq(retval, UA_STATUSCODE_GOOD);
 
+    /* DataTypeNode */
+    UA_DataTypeAttributes typeattr = UA_DataTypeAttributes_default;
+    typeattr.displayName = UA_LOCALIZEDTEXT("en-US", "TestDataType");
+    UA_Server_addDataTypeNode(server, UA_NODEID_NUMERIC(0, UA_NS0ID_ARGUMENT),
+                                  UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATATYPE),
+                                  UA_NODEID_NUMERIC(0, UA_NS0ID_HASSUBTYPE),
+                                  UA_QUALIFIEDNAME(0, "Argument"), typeattr, NULL, NULL);
+
 #ifdef UA_ENABLE_METHODCALLS
     /* MethodNode */
     UA_MethodAttributes ma = UA_MethodAttributes_default;
     ma.description = UA_LOCALIZEDTEXT("en-US", "Methodtest");
     ma.displayName = UA_LOCALIZEDTEXT("en-US", "Methodtest");
-    retval = UA_Server_addMethodNode(server, UA_NODEID_NUMERIC(0, UA_NS0ID_METHODNODE),
-                                     UA_NODEID_NUMERIC(0, 3),
+    retval = UA_Server_addMethodNode(server, UA_NODEID_NUMERIC(1, UA_NS0ID_METHODNODE),
+                                     UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
                                      UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
                                      UA_QUALIFIEDNAME(0, "Methodtest"), ma,
                                      NULL, 0, NULL, 0, NULL, NULL, NULL);
@@ -147,8 +152,7 @@ static void setup(void) {
 
 static UA_VariableNode* makeCompareSequence(void) {
     UA_VariableNode *node = (UA_VariableNode*)
-        config->nodestore.newNode(config->nodestore.context,
-                                  UA_NODECLASS_VARIABLE);
+        UA_NODESTORE_NEW(server, UA_NODECLASS_VARIABLE);
 
     UA_Int32 myInteger = 42;
     UA_Variant_setScalarCopy(&node->value.data.value.value, &myInteger, &UA_TYPES[UA_TYPES_INT32]);
@@ -283,7 +287,7 @@ START_TEST(ReadSingleAttributeDisplayNameWithoutTimestamp) {
     ck_assert(UA_String_equal(&comp.text, &respval->text));
     ck_assert(UA_String_equal(&compNode->displayName.locale, &respval->locale));
     UA_DataValue_deleteMembers(&resp);
-    config->nodestore.deleteNode(config->nodestore.context, (UA_Node*)compNode);
+    UA_NODESTORE_DELETE(server, (UA_Node*)compNode);
 } END_TEST
 
 START_TEST(ReadSingleAttributeDescriptionWithoutTimestamp) {
@@ -301,7 +305,7 @@ START_TEST(ReadSingleAttributeDescriptionWithoutTimestamp) {
     ck_assert(UA_String_equal(&compNode->description.locale, &respval->locale));
     ck_assert(UA_String_equal(&compNode->description.text, &respval->text));
     UA_DataValue_deleteMembers(&resp);
-    config->nodestore.deleteNode(config->nodestore.context, (UA_Node*)compNode);
+    UA_NODESTORE_DELETE(server, (UA_Node*)compNode);
 } END_TEST
 
 START_TEST(ReadSingleAttributeWriteMaskWithoutTimestamp) {
@@ -479,7 +483,7 @@ START_TEST(ReadSingleAttributeUserAccessLevelWithoutTimestamp) {
 
     /* Uncommented since the accesslevel is always 0xff for the local admin user */
     /* const UA_VariableNode* compNode = */
-    /*     (const UA_VariableNode*)UA_NodeStore_get(server->nodestore, &rvi.nodeId); */
+    /*     (const UA_VariableNode*)UA_NodeStore_getNode(server->nsCtx, &rvi.nodeId); */
     /* ck_assert_int_eq(0, resp.value.arrayLength); */
     /* ck_assert_ptr_eq(&UA_TYPES[UA_TYPES_BYTE], resp.value.type); */
     /* ck_assert_int_eq(*(UA_Byte*)resp.value.data, compNode->accessLevel & 0xFF); // 0xFF is the default userAccessLevel */
@@ -501,7 +505,7 @@ START_TEST(ReadSingleAttributeMinimumSamplingIntervalWithoutTimestamp) {
     ck_assert(&UA_TYPES[UA_TYPES_DOUBLE] == resp.value.type);
     ck_assert(*respval == comp);
     UA_DataValue_deleteMembers(&resp);
-    config->nodestore.deleteNode(config->nodestore.context, (UA_Node*)compNode);
+    UA_NODESTORE_DELETE(server, (UA_Node*)compNode);
 } END_TEST
 
 START_TEST(ReadSingleAttributeHistorizingWithoutTimestamp) {
@@ -522,7 +526,7 @@ START_TEST(ReadSingleAttributeExecutableWithoutTimestamp) {
 #ifdef UA_ENABLE_METHODCALLS
     UA_ReadValueId rvi;
     UA_ReadValueId_init(&rvi);
-    rvi.nodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_METHODNODE);
+    rvi.nodeId = UA_NODEID_NUMERIC(1, UA_NS0ID_METHODNODE);
     rvi.attributeId = UA_ATTRIBUTEID_EXECUTABLE;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
@@ -539,7 +543,7 @@ START_TEST(ReadSingleAttributeUserExecutableWithoutTimestamp) {
 #ifdef UA_ENABLE_METHODCALLS
     UA_ReadValueId rvi;
     UA_ReadValueId_init(&rvi);
-    rvi.nodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_METHODNODE);
+    rvi.nodeId = UA_NODEID_NUMERIC(1, UA_NS0ID_METHODNODE);
     rvi.attributeId = UA_ATTRIBUTEID_USEREXECUTABLE;
 
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
@@ -586,6 +590,26 @@ START_TEST(ReadSingleDataSourceAttributeArrayDimensionsWithoutTimestamp) {
     UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
     
     ck_assert_int_eq(UA_STATUSCODE_GOOD, resp.status);
+    UA_DataValue_deleteMembers(&resp);
+} END_TEST
+
+START_TEST(ReadSingleAttributeDataTypeDefinitionWithoutTimestamp) {
+    UA_ReadValueId rvi;
+    UA_ReadValueId_init(&rvi);
+    rvi.nodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ARGUMENT);
+    rvi.attributeId = UA_ATTRIBUTEID_DATATYPEDEFINITION;
+
+    UA_DataValue resp = UA_Server_read(server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
+
+
+#ifdef UA_ENABLE_TYPEDESCRIPTION
+    ck_assert_int_eq(UA_STATUSCODE_GOOD, resp.status);
+    ck_assert_uint_eq(resp.value.type->typeIndex, UA_TYPES_STRUCTUREDEFINITION);
+    UA_StructureDefinition *def = (UA_StructureDefinition*)resp.value.data;
+    ck_assert_uint_eq(def->fieldsSize, 5);
+#else
+    ck_assert_int_eq(UA_STATUSCODE_BADATTRIBUTEIDINVALID, resp.status);
+#endif
     UA_DataValue_deleteMembers(&resp);
 } END_TEST
 
@@ -931,6 +955,7 @@ static Suite * testSuite_services_attributes(void) {
     tcase_add_test(tc_readSingleAttributes, ReadSingleDataSourceAttributeValueEmptyWithoutTimestamp);
     tcase_add_test(tc_readSingleAttributes, ReadSingleDataSourceAttributeDataTypeWithoutTimestamp);
     tcase_add_test(tc_readSingleAttributes, ReadSingleDataSourceAttributeArrayDimensionsWithoutTimestamp);
+    tcase_add_test(tc_readSingleAttributes, ReadSingleAttributeDataTypeDefinitionWithoutTimestamp);
 
     suite_add_tcase(s, tc_readSingleAttributes);
 

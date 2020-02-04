@@ -14,13 +14,14 @@
 #define UA_CLIENT_INTERNAL_H_
 
 #define UA_INTERNAL
-#include "ua_securechannel.h"
-#include "ua_workqueue.h"
-#include "ua_client.h"
-#include "ua_client_highlevel.h"
-#include "ua_client_subscriptions.h"
-#include "ua_timer.h"
+#include <open62541/client.h>
+#include <open62541/client_highlevel.h>
+#include <open62541/client_subscriptions.h>
+
 #include "open62541_queue.h"
+#include "ua_securechannel.h"
+#include "ua_timer.h"
+#include "ua_workqueue.h"
 
 _UA_BEGIN_DECLS
 
@@ -117,10 +118,11 @@ typedef struct CustomCallback {
     //to find the correct callback
     UA_UInt32 callbackId;
 
-    UA_ClientAsyncServiceCallback callback;
+    UA_ClientAsyncServiceCallback userCallback;
+    void *userData;
 
-    UA_AttributeId attributeId;
-    const UA_DataType *outDataType;
+    bool isAsync;
+    void *clientData;
 } CustomCallback;
 
 struct UA_Client {
@@ -144,6 +146,7 @@ struct UA_Client {
     UA_UInt32 requestHandle;
 
     UA_Boolean endpointsHandshake;
+    UA_Boolean sessionHandshake;
     UA_String endpointUrl; /* Only for the async connect */
 
     /* Async Service */
@@ -168,6 +171,16 @@ struct UA_Client {
     UA_Boolean pendingConnectivityCheck;
 };
 
+static UA_INLINE CustomCallback *
+UA_Client_findCustomCallback(UA_Client *client, UA_UInt32 requestId) {
+    CustomCallback *cc;
+    LIST_FOREACH(cc, &client->customCallbacks, pointers) {
+        if(cc->callbackId == requestId)
+            break;
+    }
+    return cc;
+}
+
 void
 setClientState(UA_Client *client, UA_ClientState state);
 
@@ -187,18 +200,23 @@ UA_Client_getEndpointsInternal(UA_Client *client, const UA_String endpointUrl,
                                size_t *endpointDescriptionsSize,
                                UA_EndpointDescription **endpointDescriptions);
 
+UA_Boolean
+endpointUnconfigured(UA_Client *client);
+
 /* Receive and process messages until a synchronous message arrives or the
  * timout finishes */
 UA_StatusCode
 receivePacketAsync(UA_Client *client);
 
-UA_StatusCode
-processACKResponseAsync(void *application, UA_Connection *connection,
+void
+processACKResponseAsync(void *application, UA_SecureChannel *channel,
+                        UA_MessageType messageType, UA_UInt32 requestId,
                         UA_ByteString *chunk);
 
-UA_StatusCode
-processOPNResponseAsync(void *application, UA_Connection *connection,
-                        UA_ByteString *chunk);
+void
+decodeProcessOPNResponseAsync(void *application, UA_SecureChannel *channel,
+                              UA_MessageType messageType, UA_UInt32 requestId,
+                              UA_ByteString *chunk);
 
 UA_StatusCode
 openSecureChannel(UA_Client *client, UA_Boolean renew);
@@ -206,7 +224,7 @@ openSecureChannel(UA_Client *client, UA_Boolean renew);
 UA_StatusCode
 receiveServiceResponse(UA_Client *client, void *response,
                        const UA_DataType *responseType, UA_DateTime maxDate,
-                       UA_UInt32 *synchronousRequestId);
+                       const UA_UInt32 *synchronousRequestId);
 
 UA_StatusCode
 receiveServiceResponseAsync(UA_Client *client, void *response,

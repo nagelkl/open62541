@@ -5,10 +5,11 @@
  * Copyright (c) 2019 Fraunhofer IOSB (Author: Lukas Meling)
  */
 
-#include "ua_types.h"
-#include "ua_types_generated_handling.h"
-#include "ua_types_encoding_json.h"
+#include <open62541/types.h>
+#include <open62541/types_generated_handling.h>
+
 #include "ua_pubsub_networkmessage.h"
+#include "ua_types_encoding_json.h"
 
 /* Json keys for dsm */
 const char * UA_DECODEKEY_MESSAGES = ("Messages");
@@ -523,13 +524,13 @@ status UA_NetworkMessage_decodeJson(UA_NetworkMessage *dst, const UA_ByteString 
     memset(&ctx, 0, sizeof(CtxJson));
     ParseCtx parseCtx;
     memset(&parseCtx, 0, sizeof(ParseCtx));
-    parseCtx.tokenArray = (jsmntok_t*)malloc(sizeof(jsmntok_t) * TOKENCOUNT);
-    memset(parseCtx.tokenArray, 0, sizeof(jsmntok_t) * TOKENCOUNT);
+    parseCtx.tokenArray = (jsmntok_t*)UA_malloc(sizeof(jsmntok_t) * UA_JSON_MAXTOKENCOUNT);
+    memset(parseCtx.tokenArray, 0, sizeof(jsmntok_t) * UA_JSON_MAXTOKENCOUNT);
     status ret = tokenize(&parseCtx, &ctx, src);
     if(ret != UA_STATUSCODE_GOOD){
         return ret;
     }
     ret = NetworkMessage_decodeJsonInternal(dst, &ctx, &parseCtx);
-    free(parseCtx.tokenArray);
+    UA_free(parseCtx.tokenArray);
     return ret;
 }

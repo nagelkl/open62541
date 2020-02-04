@@ -14,13 +14,14 @@
  *    Copyright 2016 (c) Lorenz Haas
  */
 
-#include "ua_util_internal.h"
-#include "ua_types.h"
-#include "ua_types_generated.h"
-#include "ua_types_generated_handling.h"
+#include <open62541/types.h>
+#include <open62541/types_generated.h>
+#include <open62541/types_generated_handling.h>
 
-#include "pcg_basic.h"
+#include "ua_util_internal.h"
+
 #include "libc_time.h"
+#include "pcg_basic.h"
 
 /* Datatype Handling
  * -----------------
@@ -96,18 +97,22 @@ UA_UInt32_random(void) {
 /*****************/
 
 UA_String
-UA_String_fromChars(char const src[]) {
-    UA_String str;
-    str.length = strlen(src);
-    if(str.length > 0) {
-        str.data = (u8*)UA_malloc(str.length);
-        if(!str.data)
-            return UA_STRING_NULL;
-        memcpy(str.data, src, str.length);
+UA_String_fromChars(const char *src) {
+    UA_String s; s.length = 0; s.data = NULL;
+    if(!src)
+        return s;
+    s.length = strlen(src);
+    if(s.length > 0) {
+        s.data = (u8*)UA_malloc(s.length);
+        if(!s.data) {
+            s.length = 0;
+            return s;
+        }
+        memcpy(s.data, src, s.length);
     } else {
-        str.data = (u8*)UA_EMPTY_ARRAY_SENTINEL;
+        s.data = (u8*)UA_EMPTY_ARRAY_SENTINEL;
     }
-    return str;
+    return s;
 }
 
 UA_Boolean
@@ -116,6 +121,8 @@ UA_String_equal(const UA_String *s1, const UA_String *s2) {
         return false;
     if(s1->length == 0)
         return true;
+    if(s2->data == NULL)
+        return false;
     i32 is = memcmp((char const*)s1->data,
                     (char const*)s2->data, s1->length);
     return (is == 0) ? true : false;
@@ -165,13 +172,19 @@ UA_DateTimeStruct
 UA_DateTime_toStruct(UA_DateTime t) {
     /* Calculating the the milli-, micro- and nanoseconds */
     UA_DateTimeStruct dateTimeStruct;
-    dateTimeStruct.nanoSec  = (u16)((t % 10) * 100);
-    dateTimeStruct.microSec = (u16)((t % 10000) / 10);
-    dateTimeStruct.milliSec = (u16)((t % 10000000) / 10000);
+    if(t >= 0) {
+        dateTimeStruct.nanoSec  = (u16)((t % 10) * 100);
+        dateTimeStruct.microSec = (u16)((t % 10000) / 10);
+        dateTimeStruct.milliSec = (u16)((t % 10000000) / 10000);
+    } else {
+        dateTimeStruct.nanoSec  = (u16)(((t % 10 + t) % 10) * 100);
+        dateTimeStruct.microSec = (u16)(((t % 10000 + t) % 10000) / 10);
+        dateTimeStruct.milliSec = (u16)(((t % 10000000 + t) % 10000000) / 10000);
+    }
 
     /* Calculating the unix time with #include <time.h> */
-    long long secSinceUnixEpoch = (long long)
-        ((t - UA_DATETIME_UNIX_EPOCH) / UA_DATETIME_SEC);
+    long long secSinceUnixEpoch = (long long)(t / UA_DATETIME_SEC)
+        - (long long)(UA_DATETIME_UNIX_EPOCH / UA_DATETIME_SEC);
     struct mytm ts;
     memset(&ts, 0, sizeof(struct mytm));
     __secs_to_tm(secSinceUnixEpoch, &ts);
@@ -182,6 +195,27 @@ UA_DateTime_toStruct(UA_DateTime t) {
     dateTimeStruct.month  = (u16)(ts.tm_mon + 1);
     dateTimeStruct.year   = (u16)(ts.tm_year + 1900);
     return dateTimeStruct;
+}
+
+UA_DateTime
+UA_DateTime_fromStruct(UA_DateTimeStruct ts) {
+    /* Seconds since the Unix epoch */
+    struct mytm tm;
+    memset(&tm, 0, sizeof(struct mytm));
+    tm.tm_year = ts.year - 1900;
+    tm.tm_mon = ts.month - 1;
+    tm.tm_mday = ts.day;
+    tm.tm_hour = ts.hour;
+    tm.tm_min = ts.min;
+    tm.tm_sec = ts.sec;
+    long long sec_epoch = __tm_to_secs(&tm);
+
+    UA_DateTime t = UA_DATETIME_UNIX_EPOCH;
+    t += sec_epoch * UA_DATETIME_SEC;
+    t += ts.milliSec * UA_DATETIME_MSEC;
+    t += ts.microSec * UA_DATETIME_USEC;
+    t += ts.nanoSec / 100;
+    return t;
 }
 
 /* Guid */
@@ -280,45 +314,80 @@ UA_NodeId_isNull(const UA_NodeId *p) {
     return false;
 }
 
-UA_Boolean
-UA_NodeId_equal(const UA_NodeId *n1, const UA_NodeId *n2) {
-    if(n1 == NULL || n2 == NULL)
-        return false;
-    if(n1->namespaceIndex != n2->namespaceIndex ||
-       n1->identifierType!=n2->identifierType)
-        return false;
+/* Absolute ordering for NodeIds */
+UA_Order
+UA_NodeId_order(const UA_NodeId *n1, const UA_NodeId *n2) {
+    /* Compare namespaceIndex */
+    if(n1->namespaceIndex < n2->namespaceIndex)
+        return UA_ORDER_LESS;
+    if(n1->namespaceIndex > n2->namespaceIndex)
+        return UA_ORDER_MORE;
+
+    /* Compare identifierType */
+    if(n1->identifierType < n2->identifierType)
+        return UA_ORDER_LESS;
+    if(n1->identifierType > n2->identifierType)
+        return UA_ORDER_MORE;
+
+    /* Compare the identifier */
     switch(n1->identifierType) {
     case UA_NODEIDTYPE_NUMERIC:
-        return (n1->identifier.numeric == n2->identifier.numeric);
-    case UA_NODEIDTYPE_STRING:
-        return UA_String_equal(&n1->identifier.string,
-                               &n2->identifier.string);
+        if(n1->identifier.numeric < n2->identifier.numeric)
+            return UA_ORDER_LESS;
+        if(n1->identifier.numeric > n2->identifier.numeric)
+            return UA_ORDER_MORE;
+        break;
     case UA_NODEIDTYPE_GUID:
-        return UA_Guid_equal(&n1->identifier.guid,
-                             &n2->identifier.guid);
-    case UA_NODEIDTYPE_BYTESTRING:
-        return UA_ByteString_equal(&n1->identifier.byteString,
-                                   &n2->identifier.byteString);
-    }
-    return false;
-}
+        if(n1->identifier.guid.data1 < n2->identifier.guid.data1) {
+            return UA_ORDER_LESS;
+        } else if(n1->identifier.guid.data1 > n2->identifier.guid.data1) {
+            return UA_ORDER_MORE;
+        } else if(n1->identifier.guid.data2 < n2->identifier.guid.data2) {
+            return UA_ORDER_LESS;
+        } else if(n1->identifier.guid.data2 > n2->identifier.guid.data2) {
+            return UA_ORDER_MORE;
+        } else if(n1->identifier.guid.data3 < n2->identifier.guid.data3) {
+            return UA_ORDER_LESS;
+        } else if(n1->identifier.guid.data3 > n2->identifier.guid.data3) {
+            return UA_ORDER_MORE;
+        } else {
+            int cmp = memcmp(n1->identifier.guid.data4, n2->identifier.guid.data4, 8);
 
-UA_Boolean
-UA_ExpandedNodeId_equal(const UA_ExpandedNodeId *n1, const UA_ExpandedNodeId *n2) {
-    if(n1 == NULL || n2 == NULL)
-        return false;
-    if(n1->serverIndex != n2->serverIndex)
-        return false;
-    if(!UA_String_equal(&n1->namespaceUri, &n2->namespaceUri))
-        return false;
-    return UA_NodeId_equal(&n1->nodeId, &n2->nodeId);
+            if(cmp < 0) return UA_ORDER_LESS;
+            if(cmp > 0) return UA_ORDER_MORE;
+
+        }
+
+        break;
+    case UA_NODEIDTYPE_STRING:
+    case UA_NODEIDTYPE_BYTESTRING: {
+        size_t minLength = UA_MIN(n1->identifier.string.length, n2->identifier.string.length);
+        int cmp = strncmp((const char*)n1->identifier.string.data,
+                          (const char*)n2->identifier.string.data,
+                          minLength);
+        if(cmp < 0)
+            return UA_ORDER_LESS;
+        if(cmp > 0)
+            return UA_ORDER_MORE;
+
+        if(n1->identifier.string.length < n2->identifier.string.length)
+            return UA_ORDER_LESS;
+        if(n1->identifier.string.length > n2->identifier.string.length)
+            return UA_ORDER_MORE;
+        break;
+    }
+    default:
+        break;
+    }
+
+    return UA_ORDER_EQ;
 }
 
 /* FNV non-cryptographic hash function. See
  * https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function */
 #define FNV_PRIME_32 16777619
-static u32
-fnv32(u32 fnv, const u8 *buf, size_t size) {
+u32
+UA_ByteString_hash(u32 fnv, const u8 *buf, size_t size) {
     for(size_t i = 0; i < size; ++i) {
         fnv = fnv ^ (buf[i]);
         fnv = fnv * FNV_PRIME_32;
@@ -335,9 +404,9 @@ UA_NodeId_hash(const UA_NodeId *n) {
         return (u32)((n->namespaceIndex + ((n->identifier.numeric * (u64)2654435761) >> (32))) & UINT32_C(4294967295)); /*  Knuth's multiplicative hashing */
     case UA_NODEIDTYPE_STRING:
     case UA_NODEIDTYPE_BYTESTRING:
-        return fnv32(n->namespaceIndex, n->identifier.string.data, n->identifier.string.length);
+        return UA_ByteString_hash(n->namespaceIndex, n->identifier.string.data, n->identifier.string.length);
     case UA_NODEIDTYPE_GUID:
-        return fnv32(n->namespaceIndex, (const u8*)&n->identifier.guid, sizeof(UA_Guid));
+        return UA_ByteString_hash(n->namespaceIndex, (const u8*)&n->identifier.guid, sizeof(UA_Guid));
     }
 }
 
@@ -355,6 +424,36 @@ ExpandedNodeId_copy(UA_ExpandedNodeId const *src, UA_ExpandedNodeId *dst,
     retval |= UA_String_copy(&src->namespaceUri, &dst->namespaceUri);
     dst->serverIndex = src->serverIndex;
     return retval;
+}
+
+UA_Order
+UA_ExpandedNodeId_order(const UA_ExpandedNodeId *n1,
+                        const UA_ExpandedNodeId *n2) {
+    if(n1->serverIndex > n2->serverIndex)
+        return UA_ORDER_MORE;
+    if(n1->serverIndex < n2->serverIndex)
+        return UA_ORDER_LESS;
+    if(n1->namespaceUri.length > 0) {
+        if(n1->namespaceUri.length > n2->namespaceUri.length)
+            return UA_ORDER_MORE;
+        if(n1->namespaceUri.length < n2->namespaceUri.length)
+            return UA_ORDER_LESS;
+        int cmp = strncmp((const char*)n1->namespaceUri.data,
+                          (const char*)n2->namespaceUri.data,
+                          n1->namespaceUri.length);
+        if(cmp < 0)
+            return UA_ORDER_LESS;
+        if(cmp > 0)
+            return UA_ORDER_MORE;
+    }
+    return UA_NodeId_order(&n1->nodeId, &n2->nodeId);
+}
+
+u32
+UA_ExpandedNodeId_hash(const UA_ExpandedNodeId *n) {
+    u32 h = UA_NodeId_hash(&n->nodeId);
+    h = UA_ByteString_hash(h, (const UA_Byte*)&n->serverIndex, 4);
+    return UA_ByteString_hash(h, n->namespaceUri.data, n->namespaceUri.length);
 }
 
 /* ExtensionObject */

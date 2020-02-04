@@ -18,15 +18,17 @@
 # define _BSD_SOURCE
 #endif
 
+#include <open62541/types.h>
+
 #include <stdio.h>
-#include <ua_types.h>
 
 /* Internal headers */
-#include "ua_types_generated.h"
-#include "ua_types_generated_handling.h"
+#include <open62541/types_generated.h>
+#include <open62541/types_generated_handling.h>
+
+#include "ua_pubsub_networkmessage.h"
 #include "ua_types_encoding_binary.h"
 #include "ua_types_encoding_json.h"
-#include "ua_pubsub_networkmessage.h"
 
 static UA_StatusCode
 encode(const UA_ByteString *buf, UA_ByteString *out,
@@ -143,7 +145,7 @@ decodeNetworkMessage(const UA_ByteString *buf, UA_ByteString *out) {
     if(retval != UA_STATUSCODE_GOOD)
         return retval;
 
-    size_t binLength = UA_NetworkMessage_calcSizeBinary(&msg);
+    size_t binLength = UA_NetworkMessage_calcSizeBinary(&msg, NULL);
     retval = UA_ByteString_allocBuffer(out, binLength);
     if(retval != UA_STATUSCODE_GOOD) {
         UA_NetworkMessage_deleteMembers(&msg);

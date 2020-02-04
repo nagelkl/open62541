@@ -5,24 +5,25 @@
  *    Copyright 2018 (c) basysKom GmbH <opensource@basyskom.com> (Author: Peter Rustler)
  */
 
-#include "ua_types.h"
-#include "ua_server.h"
-#include "server/ua_server_internal.h"
-#include "ua_client.h"
-#include "client/ua_client_internal.h"
-#include "ua_client_highlevel.h"
-#include "ua_config_default.h"
-#include "ua_network_tcp.h"
+#include <open62541/client.h>
+#include <open62541/client_config_default.h>
+#include <open62541/client_highlevel.h>
+#include <open62541/plugin/historydata/history_data_backend.h>
+#include <open62541/plugin/historydata/history_data_backend_memory.h>
+#include <open62541/plugin/historydata/history_data_gathering_default.h>
+#include <open62541/plugin/historydata/history_database_default.h>
+#include <open62541/plugin/historydatabase.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
 
-#include "check.h"
+#include "client/ua_client_internal.h"
+#include "server/ua_server_internal.h"
+
+#include <check.h>
+
 #include "testing_clock.h"
 #include "testing_networklayers.h"
 #include "thread_wrapper.h"
-#include "ua_plugin_historydatabase.h"
-#include "ua_historydatabase_default.h"
-#include "ua_plugin_history_data_gathering.h"
-#include "ua_historydatabackend_memory.h"
-#include "ua_historydatagathering_default.h"
 #ifdef UA_ENABLE_HISTORIZING
 #include "historical_read_test_data.h"
 #include "randomindextest_backend.h"
@@ -30,7 +31,6 @@
 #include <stddef.h>
 
 static UA_Server *server;
-static UA_ServerConfig *config;
 #ifdef UA_ENABLE_HISTORIZING
 static UA_HistoryDataGathering *gathering;
 #endif
@@ -59,8 +59,7 @@ static void serverMutexUnlock(void) {
     }
 }
 
-THREAD_CALLBACK(serverloop)
-{
+THREAD_CALLBACK(serverloop) {
     while(running) {
         serverMutexLock();
         UA_Server_run_iterate(server, false);
@@ -69,27 +68,30 @@ THREAD_CALLBACK(serverloop)
     return 0;
 }
 
-static void
-setup(void)
-{
+static void setup(void) {
     if (!(MUTEX_INIT(serverMutex))) {
         fprintf(stderr, "Server mutex was not created correctly.\n");
         exit(1);
     }
     running = true;
-    config = UA_ServerConfig_new_default();
+
+    server = UA_Server_new();
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    UA_ServerConfig_setDefault(config);
+
 #ifdef UA_ENABLE_HISTORIZING
     gathering = (UA_HistoryDataGathering*)UA_calloc(1, sizeof(UA_HistoryDataGathering));
     *gathering = UA_HistoryDataGathering_Default(1);
     config->historyDatabase = UA_HistoryDatabase_default(*gathering);
 #endif
-    server = UA_Server_new(config);
+
     UA_StatusCode retval = UA_Server_run_startup(server);
-    if (retval != UA_STATUSCODE_GOOD)
-    {
+    if(retval != UA_STATUSCODE_GOOD) {
         fprintf(stderr, "Error while calling Server_run_startup. %s\n", UA_StatusCode_name(retval));
+        UA_Server_delete(server);
         exit(1);
     }
+
     THREAD_CREATE(server_thread, serverloop);
     /* Define the attribute of the uint32 variable node */
     UA_VariableAttributes attr = UA_VariableAttributes_default;
@@ -107,27 +109,23 @@ setup(void)
     parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
     parentReferenceNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
     UA_NodeId_init(&outNodeId);
-    retval = UA_Server_addVariableNode(server,
-                                                uint32NodeId,
-                                                parentNodeId,
-                                                parentReferenceNodeId,
-                                                uint32Name,
-                                                UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
-                                                attr,
-                                                NULL,
-                                                &outNodeId);
-    if (retval != UA_STATUSCODE_GOOD)
-    {
+    retval = UA_Server_addVariableNode(server, uint32NodeId, parentNodeId,
+                                       parentReferenceNodeId, uint32Name,
+                                       UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
+                                       attr, NULL, &outNodeId);
+    if (retval != UA_STATUSCODE_GOOD) {
         fprintf(stderr, "Error adding variable node. %s\n", UA_StatusCode_name(retval));
+        UA_Server_delete(server);
         exit(1);
     }
 
     client = UA_Client_new();
     UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
-    if (retval != UA_STATUSCODE_GOOD)
-    {
+    if (retval != UA_STATUSCODE_GOOD) {
         fprintf(stderr, "Client can not connect to opc.tcp://localhost:4840. %s\n", UA_StatusCode_name(retval));
+        UA_Client_delete(client);
+        UA_Server_delete(server);
         exit(1);
     }
 
@@ -135,9 +133,7 @@ setup(void)
     client->connection.recv = UA_Client_recvTesting;
 }
 
-static void
-teardown(void)
-{
+static void teardown(void) {
     /* cleanup */
     UA_Client_disconnect(client);
     UA_Client_delete(client);
@@ -148,7 +144,6 @@ teardown(void)
     UA_NodeId_deleteMembers(&outNodeId);
     UA_Server_run_shutdown(server);
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
 #ifdef UA_ENABLE_HISTORIZING
     UA_free(gathering);
 #endif
@@ -310,7 +305,9 @@ requestHistory(UA_DateTime start,
     request.nodesToReadSize = 1;
     request.nodesToRead = valueId;
 
+    UA_LOCK(server->serviceMutex);
     Service_HistoryRead(server, &server->adminSession, &request, response);
+    UA_UNLOCK(server->serviceMutex);
     UA_HistoryReadRequest_deleteMembers(&request);
 }
 
@@ -502,7 +499,9 @@ deleteHistory(UA_DateTime start,
 
     UA_HistoryUpdateResponse response;
     UA_HistoryUpdateResponse_init(&response);
+    UA_LOCK(server->serviceMutex);
     Service_HistoryUpdate(server, &server->adminSession, &request, &response);
+    UA_UNLOCK(server->serviceMutex);
     UA_HistoryUpdateRequest_deleteMembers(&request);
     UA_StatusCode ret = UA_STATUSCODE_GOOD;
     if (response.responseHeader.serviceResult != UA_STATUSCODE_GOOD)
@@ -554,7 +553,9 @@ updateHistory(UA_PerformUpdateType updateType, UA_DateTime *updateData, UA_Statu
 
     UA_HistoryUpdateResponse response;
     UA_HistoryUpdateResponse_init(&response);
+    UA_LOCK(server->serviceMutex);
     Service_HistoryUpdate(server, &server->adminSession, &request, &response);
+    UA_UNLOCK(server->serviceMutex);
     UA_HistoryUpdateRequest_deleteMembers(&request);
     UA_StatusCode ret = UA_STATUSCODE_GOOD;
     if (response.responseHeader.serviceResult != UA_STATUSCODE_GOOD)

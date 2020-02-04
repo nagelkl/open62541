@@ -5,32 +5,29 @@
  *    Copyright 2018 (c) basysKom GmbH <opensource@basyskom.com> (Author: Peter Rustler)
  */
 
-#include "ua_types.h"
-#include "ua_server.h"
-#include "server/ua_server_internal.h"
-#include "ua_client.h"
-#include "client/ua_client_internal.h"
-#include "ua_client_highlevel.h"
-#include "ua_config_default.h"
-#include "ua_network_tcp.h"
+#include <open62541/client.h>
+#include <open62541/client_config_default.h>
+#include <open62541/plugin/historydata/history_data_backend.h>
+#include <open62541/plugin/historydata/history_data_backend_memory.h>
+#include <open62541/plugin/historydata/history_data_gathering_default.h>
+#include <open62541/plugin/historydata/history_database_default.h>
+#include <open62541/plugin/historydatabase.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
 
-#include "check.h"
+#include "client/ua_client_internal.h"
+
+#include <check.h>
+
 #include "testing_clock.h"
 #include "testing_networklayers.h"
 #include "thread_wrapper.h"
-#include "ua_plugin_historydatabase.h"
-#include "ua_historydatabase_default.h"
-#include "ua_plugin_history_data_gathering.h"
-#include "ua_historydatabackend_memory.h"
-#include "ua_historydatagathering_default.h"
 #ifdef UA_ENABLE_HISTORIZING
 #include "historical_read_test_data.h"
 #endif
 #include <stddef.h>
 
-
 static UA_Server *server;
-static UA_ServerConfig *config;
 #ifdef UA_ENABLE_HISTORIZING
 static UA_HistoryDataGathering *gathering;
 #endif
@@ -55,22 +52,22 @@ static struct ReceiveTupel receivedTestData[(sizeof(testData) / sizeof(testData[
 static size_t receivedTestDataPos;
 #endif
 
-THREAD_CALLBACK(serverloop)
-{
+THREAD_CALLBACK(serverloop) {
     while(running)
         UA_Server_run_iterate(server, true);
     return 0;
 }
+
 #ifdef UA_ENABLE_HISTORIZING
 static UA_Boolean
 fillHistoricalDataBackend(UA_HistoryDataBackend backend);
-static void resetReceiveBuffer(void)
-{
+static void resetReceiveBuffer(void) {
     receivedTestDataPos = 0;
     memset(receivedTestData, 0, sizeof(receivedTestData));
 }
-static void fillInt64DataValue(UA_DateTime timestamp, UA_Int64 value, UA_DataValue *dataValue)
-{
+
+static void fillInt64DataValue(UA_DateTime timestamp, UA_Int64 value,
+                               UA_DataValue *dataValue) {
     UA_DataValue_init(dataValue);
     dataValue->hasValue = true;
     UA_Int64 d = value;
@@ -83,18 +80,20 @@ static void fillInt64DataValue(UA_DateTime timestamp, UA_Int64 value, UA_DataVal
     dataValue->status = UA_STATUSCODE_GOOD;
 }
 #endif
-static void
-setup(void)
-{
+
+static void setup(void) {
     running = true;
-    config = UA_ServerConfig_new_default();
+    server = UA_Server_new();
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    UA_ServerConfig_setDefault(config);
+
 #ifdef UA_ENABLE_HISTORIZING
     resetReceiveBuffer();
     gathering = (UA_HistoryDataGathering*)UA_calloc(1, sizeof(UA_HistoryDataGathering));
     *gathering = UA_HistoryDataGathering_Default(1);
     config->historyDatabase = UA_HistoryDatabase_default(*gathering);
 #endif
-    server = UA_Server_new(config);
+
     UA_StatusCode retval = UA_Server_run_startup(server);
     ck_assert_str_eq(UA_StatusCode_name(retval), UA_StatusCode_name(UA_STATUSCODE_GOOD));
     THREAD_CREATE(server_thread, serverloop);
@@ -136,6 +135,7 @@ setup(void)
 
     ck_assert(fillHistoricalDataBackend(setting.historizingBackend));
 #endif
+
     client = UA_Client_new();
     UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
@@ -161,7 +161,6 @@ teardown(void)
     THREAD_JOIN(server_thread);
     UA_Server_run_shutdown(server);
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
 #ifdef UA_ENABLE_HISTORIZING
     UA_free(gathering);
 #endif

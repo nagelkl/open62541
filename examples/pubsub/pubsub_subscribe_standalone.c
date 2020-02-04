@@ -10,16 +10,19 @@
  * PubSub subscriber API.
  */
 
-#include <signal.h>
+#include <open62541/plugin/log_stdout.h>
+#include <open62541/plugin/pubsub.h>
+#include <open62541/plugin/pubsub_udp.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
+
 #include "ua_pubsub_networkmessage.h"
-#include "ua_log_stdout.h"
-#include "ua_config_default.h"
-#include "ua_pubsub.h"
-#include "ua_network_pubsub_udp.h"
+
+#include <signal.h>
+
 #ifdef UA_ENABLE_PUBSUB_ETH_UADP
-#include "ua_network_pubsub_ethernet.h"
+#include <open62541/plugin/pubsub_ethernet.h>
 #endif
-#include "src_generated/ua_types_generated.h"
 
 UA_Boolean running = true;
 static void stopHandler(int sign) {
@@ -82,6 +85,10 @@ subscriberListen(UA_PubSubChannel *psc) {
                 UA_Byte value = *(UA_Byte *)dsm->data.keyFrameData.dataSetFields[i].value.data;
                 UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                             "Message content: [Byte] \tReceived data: %i", value);
+            } else if (currentType == &UA_TYPES[UA_TYPES_UINT32]) {
+                UA_UInt32 value = *(UA_UInt32 *)dsm->data.keyFrameData.dataSetFields[i].value.data;
+                UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
+                            "Message content: [UInt32] \tReceived data: %u", value);
             } else if (currentType == &UA_TYPES[UA_TYPES_DATETIME]) {
                 UA_DateTime value = *(UA_DateTime *)dsm->data.keyFrameData.dataSetFields[i].value.data;
                 UA_DateTimeStruct receivedTime = UA_DateTime_toStruct(value);

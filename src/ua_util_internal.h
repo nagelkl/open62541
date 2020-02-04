@@ -15,13 +15,21 @@
 #define UA_UTIL_H_
 
 #define UA_INTERNAL
-#include "ua_util.h"
-#include "ua_types.h"
+#include <open62541/types.h>
+#include <open62541/util.h>
 
 _UA_BEGIN_DECLS
 
 /* Macro-Expand for MSVC workarounds */
 #define UA_MACRO_EXPAND(x) x
+
+/* Print a NodeId in logs */
+#define UA_LOG_NODEID_WRAP(NODEID, LOG) {   \
+    UA_String nodeIdStr = UA_STRING_NULL;   \
+    UA_NodeId_toString(NODEID, &nodeIdStr); \
+    LOG;                                    \
+    UA_String_clear(&nodeIdStr);            \
+}
 
 /* Integer Shortnames
  * ------------------

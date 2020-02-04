@@ -8,11 +8,11 @@
  * (i.e., LDS-ME).
  */
 
-#include <ua_server.h>
-#include <ua_config_default.h>
-#include <ua_types.h>
-#include <ua_log_stdout.h>
-#include <ua_securitypolicies.h>
+#include <open62541/client.h>
+#include <open62541/client_config_default.h>
+#include <open62541/plugin/log_stdout.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
 
 #include <signal.h>
 #include <stdlib.h>
@@ -25,43 +25,6 @@ UA_Boolean running = true;
 static void stopHandler(int sign) {
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "received ctrl-c");
     running = false;
-}
-
-static UA_StatusCode
-readInteger(UA_Server *server, const UA_NodeId *sessionId,
-            void *sessionContext, const UA_NodeId *nodeId,
-            void *nodeContext, UA_Boolean includeSourceTimeStamp,
-            const UA_NumericRange *range, UA_DataValue *value) {
-    UA_Int32 *myInteger = (UA_Int32*)nodeContext;
-    value->hasValue = true;
-    UA_Variant_setScalarCopy(&value->value, myInteger, &UA_TYPES[UA_TYPES_INT32]);
-
-    // we know the nodeid is a string
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Node read %.*s",
-                (int)nodeId->identifier.string.length,
-                nodeId->identifier.string.data);
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
-                "read value %i", *(UA_UInt32 *)myInteger);
-    return UA_STATUSCODE_GOOD;
-}
-
-static UA_StatusCode
-writeInteger(UA_Server *server, const UA_NodeId *sessionId,
-             void *sessionContext, const UA_NodeId *nodeId,
-             void *nodeContext, const UA_NumericRange *range,
-             const UA_DataValue *value) {
-    UA_Int32 *myInteger = (UA_Int32*)nodeContext;
-    if(value->hasValue && UA_Variant_isScalar(&value->value) &&
-       value->value.type == &UA_TYPES[UA_TYPES_INT32] && value->value.data)
-        *myInteger = *(UA_Int32 *)value->value.data;
-
-    // we know the nodeid is a string
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Node written %.*s",
-                (int)nodeId->identifier.string.length,
-                nodeId->identifier.string.data);
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
-                "written value %i", *(UA_UInt32 *)myInteger);
-    return UA_STATUSCODE_GOOD;
 }
 
 char *discovery_url = NULL;
@@ -143,7 +106,7 @@ UA_EndpointDescription *getRegisterEndpointFromServer(const char *discoveryServe
     }
     UA_Array_delete(endpointArray, endpointArraySize,
                     &UA_TYPES[UA_TYPES_ENDPOINTDESCRIPTION]);
-
+    UA_Client_delete(client);
     return returnEndpoint;
 }
 
@@ -260,7 +223,7 @@ UA_Client *getRegisterClient(UA_EndpointDescription *endpointRegister, int argc,
 
     return clientRegister;
 #else
-	return NULL;
+    return NULL;
 #endif
 }
 
@@ -268,47 +231,54 @@ int main(int argc, char **argv) {
     signal(SIGINT, stopHandler); /* catches ctrl-c */
     signal(SIGTERM, stopHandler);
 
-    UA_ServerConfig *config = UA_ServerConfig_new_minimal(16600, NULL);
-    // To enable mDNS discovery, set application type to discovery server.
-    config->applicationDescription.applicationType = UA_APPLICATIONTYPE_DISCOVERYSERVER;
+    UA_Server *server = UA_Server_new();
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    // use port 0 to dynamically assign port
+    UA_ServerConfig_setMinimal(config, 0, NULL);
+
+    // An LDS server normally has the application type to DISCOVERYSERVER.
+    // Since this instance implements LDS and other OPC UA services, we set the type to SERVER.
+    // NOTE: Using DISCOVERYSERVER will cause UaExpert to not show this instance in the server list.
+    // See also: https://forum.unified-automation.com/topic1987.html
+
+    config->applicationDescription.applicationType = UA_APPLICATIONTYPE_SERVER;
     UA_String_clear(&config->applicationDescription.applicationUri);
     config->applicationDescription.applicationUri =
         UA_String_fromChars("urn:open62541.example.server_multicast");
-    config->mdnsServerName = UA_String_fromChars("Sample Multicast Server");
+
+    // Enable the mDNS announce and response functionality
+    config->discovery.mdnsEnable = true;
+
+    config->discovery.mdns.mdnsServerName = UA_String_fromChars("Sample Multicast Server");
+
+    //setting custom outbound interface
+    config->discovery.mdnsInterfaceIP = UA_String_fromChars("42.42.42.42"); //this line will produce an error and set the interface to 0.0.0.0
+
     // See http://www.opcfoundation.org/UA/schemas/1.03/ServerCapabilities.csv
-    //config.serverCapabilitiesSize = 1;
-    //UA_String caps = UA_String_fromChars("LDS");
-    //config.serverCapabilities = &caps;
-    UA_Server *server = UA_Server_new(config);
+    // For a LDS server, you should only indicate the LDS capability.
+    // If this instance is an LDS and at the same time a normal OPC UA server, you also have to indicate
+    // the additional capabilities.
+    // NOTE: UaExpert does not show LDS-only servers in the list.
+    // See also: https://forum.unified-automation.com/topic1987.html
 
-    /* add a variable node to the address space */
-    UA_Int32 myInteger = 42;
-    UA_NodeId myIntegerNodeId = UA_NODEID_STRING(1, "the.answer");
-    UA_QualifiedName myIntegerName = UA_QUALIFIEDNAME(1, "the answer");
-    UA_DataSource dateDataSource;
-    dateDataSource.read = readInteger;
-    dateDataSource.write = writeInteger;
-    UA_VariableAttributes attr = UA_VariableAttributes_default;
-    attr.description = UA_LOCALIZEDTEXT("en-US", "the answer");
-    attr.displayName = UA_LOCALIZEDTEXT("en-US", "the answer");
-
-    UA_Server_addDataSourceVariableNode(server, myIntegerNodeId,
-                                        UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
-                                        UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
-                                        myIntegerName, UA_NODEID_NULL, attr, dateDataSource,
-                                        &myInteger, NULL);
-
-    // callback which is called when a new server is detected through mDNS
-    UA_Server_setServerOnNetworkCallback(server, serverOnNetworkCallback, NULL);
+    config->discovery.mdns.serverCapabilitiesSize = 2;
+    UA_String *caps = (UA_String *) UA_Array_new(2, &UA_TYPES[UA_TYPES_STRING]);
+    caps[0] = UA_String_fromChars("LDS");
+    caps[1] = UA_String_fromChars("NA");
+    config->discovery.mdns.serverCapabilities = caps;
 
     // Start the server and call iterate to wait for the multicast discovery of the LDS
     UA_StatusCode retval = UA_Server_run_startup(server);
+
+    // callback which is called when a new server is detected through mDNS
+    // needs to be set after UA_Server_run_startup or UA_Server_run
+    UA_Server_setServerOnNetworkCallback(server, serverOnNetworkCallback, NULL);
+
     if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not start the server. StatusCode %s",
                      UA_StatusCode_name(retval));
         UA_Server_delete(server);
-        UA_ServerConfig_delete(config);
         UA_free(discovery_url);
         return EXIT_FAILURE;
     }
@@ -318,7 +288,6 @@ int main(int argc, char **argv) {
         UA_Server_run_iterate(server, true);
     if(!running) {
         UA_Server_delete(server);
-        UA_ServerConfig_delete(config);
         UA_free(discovery_url);
         return EXIT_FAILURE;
     }
@@ -333,7 +302,6 @@ int main(int argc, char **argv) {
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not find any suitable endpoints on discovery server");
         UA_Server_delete(server);
-        UA_ServerConfig_delete(config);
         return EXIT_FAILURE;
     }
 
@@ -342,7 +310,6 @@ int main(int argc, char **argv) {
         UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                      "Could not create the client for remote registering");
         UA_Server_delete(server);
-        UA_ServerConfig_delete(config);
         return EXIT_FAILURE;
     }
 
@@ -350,6 +317,7 @@ int main(int argc, char **argv) {
     char *endpointUrl = (char*)UA_malloc(endpointRegister->endpointUrl.length + 1);
     memcpy(endpointUrl, endpointRegister->endpointUrl.data, endpointRegister->endpointUrl.length);
     endpointUrl[endpointRegister->endpointUrl.length] = 0;
+    UA_EndpointDescription_delete(endpointRegister);
     retval = UA_Server_addPeriodicServerRegisterCallback(server, clientRegister, endpointUrl,
                                                          10 * 60 * 1000, 500, NULL);
     if(retval != UA_STATUSCODE_GOOD) {
@@ -360,7 +328,6 @@ int main(int argc, char **argv) {
         UA_Client_disconnect(clientRegister);
         UA_Client_delete(clientRegister);
         UA_Server_delete(server);
-        UA_ServerConfig_delete(config);
         return EXIT_FAILURE;
     }
 
@@ -380,6 +347,5 @@ int main(int argc, char **argv) {
     UA_Client_disconnect(clientRegister);
     UA_Client_delete(clientRegister);
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

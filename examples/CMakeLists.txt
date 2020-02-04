@@ -1,6 +1,8 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.0...3.12)
 project(open62541-examples)
-
+if(${CMAKE_VERSION} VERSION_LESS 3.12)
+    cmake_policy(VERSION ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION})
+endif()
 # This examples folder can also be built standalone.
 # First install open62541 using `make install` then
 # copy this folder to any other location and call CMake directly:
@@ -22,6 +24,10 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 
     if(NOT UA_TOOLS_DIR)
         set(UA_TOOLS_DIR ${open62541_TOOLS_DIR})
+    endif()
+
+    if(NOT UA_NODESET_DIR)
+        set(UA_NODESET_DIR ${open62541_NODESET_DIR})
     endif()
 
     function(assign_source_group)
@@ -81,6 +87,9 @@ add_example(tutorial_server_object tutorial_server_object.c)
 
 if(UA_ENABLE_METHODCALLS)
     add_example(tutorial_server_method tutorial_server_method.c)
+    if (UA_MULTITHREADING EQUAL 100)
+        add_example(tutorial_server_method_async tutorial_server_method_async.c)
+    endif()
 endif()
 
 add_example(tutorial_client_firststeps tutorial_client_firststeps.c)
@@ -88,7 +97,10 @@ add_example(tutorial_client_firststeps tutorial_client_firststeps.c)
 add_example(tutorial_client_events tutorial_client_events.c)
 
 if(UA_ENABLE_SUBSCRIPTIONS_EVENTS)
-    add_example(tutorial_server_events tutorial_server_events.c)
+  add_example(tutorial_server_events tutorial_server_events.c)
+  if(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS)
+    add_example(tutorial_server_alarms_conditions tutorial_server_alarms_conditions.c)
+  endif()
 endif()
 
 ##################
@@ -107,6 +119,8 @@ install(PROGRAMS $<TARGET_FILE:server_ctt>
 
 add_example(client client.c)
 
+add_example(client_connect client_connect.c)
+
 if(UA_ENABLE_HISTORIZING)
     add_example(client_historical client_historical.c)
 endif()
@@ -116,6 +130,12 @@ install(PROGRAMS $<TARGET_FILE:client>
         RENAME ua_client)
 
 add_example(client_async client_async.c)
+
+if(UA_ENABLE_METHODCALLS)
+    if (UA_MULTITHREADING EQUAL 100)
+        add_example(client_method_async client_method_async.c)
+    endif()
+endif()
 
 add_example(client_connect_loop client_connect_loop.c)
 
@@ -142,12 +162,9 @@ if(UA_ENABLE_HISTORIZING)
 endif()
 
 if(UA_ENABLE_ENCRYPTION)
-    add_example(server_basic128rsa15 encryption/server_basic128rsa15.c)
-    add_example(server_basic256sha256 encryption/server_basic256sha256.c)
+    add_example(server_encryption encryption/server_encryption.c)
     add_example(client_encryption encryption/client_encryption.c)
-    # common.h
-    target_include_directories(server_basic128rsa15 PRIVATE "${PROJECT_SOURCE_DIR}/examples")
-    target_include_directories(server_basic256sha256 PRIVATE "${PROJECT_SOURCE_DIR}/examples")
+    target_include_directories(server_encryption PRIVATE "${PROJECT_SOURCE_DIR}/examples")
     target_include_directories(client_encryption PRIVATE "${PROJECT_SOURCE_DIR}/examples")
 endif()
 
@@ -157,17 +174,9 @@ add_example(custom_datatype_server custom_datatype/server_types_custom.c)
 if(UA_ENABLE_NODEMANAGEMENT)
     add_example(access_control_server access_control/server_access_control.c)
     add_example(access_control_client access_control/client_access_control.c)
-endif()
-
-if(UA_BUILD_SELFSIGNED_CERTIFICATE)
-  find_package(OpenSSL REQUIRED)
-  add_custom_command(OUTPUT server_cert.der
-                     COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/certs/create_self-signed.py ${CMAKE_CURRENT_BINARY_DIR}
-                     DEPENDS ${CMAKE_SOURCE_DIR}/tools/certs/create_self-signed.py
-                             ${CMAKE_SOURCE_DIR}/tools/certs/localhost.cnf)
-  add_custom_target(selfsigned ALL DEPENDS server_cert.der)
-  add_executable(server_certificate server_certificate.c ${STATIC_OBJECTS} server_cert.der)
-  target_link_libraries(server_certificate open62541 ${open62541_LIBRARIES})
+    if(UA_ENABLE_ENCRYPTION)
+    add_example(access_control_client_encrypt access_control_encrypt/client_access_control_encrypt.c)
+    endif()
 endif()
 
 if(UA_ENABLE_DISCOVERY_MULTICAST)
@@ -186,10 +195,18 @@ add_subdirectory(nodeset)
 if(UA_ENABLE_PUBSUB)
     add_example(tutorial_pubsub_connection pubsub/tutorial_pubsub_connection.c)
     add_example(tutorial_pubsub_publish pubsub/tutorial_pubsub_publish.c)
+	add_example(server_pubsub_publisher_iop pubsub/server_pubsub_publisher_iop.c)
+	add_example(server_pubsub_publish_rt_level pubsub/server_pubsub_publisher_rt_level.c)
     if(UA_ENABLE_AMALGAMATION)
         message(WARNING "PubSub subscriber tutorial (preview) can not be used with AMALGAMATION. Skipping tutorial_pubsub_subscribe.")
     else(NOT UA_ENABLE_AMALGAMATION)
         add_example(tutorial_pubsub_subscribe pubsub/tutorial_pubsub_subscribe.c)
         add_example(pubsub_subscribe_standalone pubsub/pubsub_subscribe_standalone.c)
+    endif()
+    if(UA_ENABLE_PUBSUB_MQTT)
+        if(NOT WIN32)
+            include_directories(${PROJECT_SOURCE_DIR}/../plugins)
+            add_example(tutorial_pubsub_mqtt_publish pubsub/tutorial_pubsub_mqtt_publish.c)
+        endif()
     endif()
 endif()

@@ -1,11 +1,10 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include <ua_server.h>
-#include <ua_config_default.h>
-#include <ua_plugin_access_control.h>
-#include <ua_accesscontrol_default.h>
-#include <ua_log_stdout.h>
+#include <open62541/plugin/accesscontrol_default.h>
+#include <open62541/plugin/log_stdout.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
 
 #include <signal.h>
 #include <stdlib.h>
@@ -57,23 +56,26 @@ int main(void) {
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
 
-    UA_ServerConfig *config = UA_ServerConfig_new_default();
-    // disable anonymous logins, enable two user/password logins
-    config->accessControl.deleteMembers(&config->accessControl);
-    if (UA_AccessControl_default(&config->accessControl, false, 2, logins) != UA_STATUSCODE_GOOD) {
-        return EXIT_FAILURE;
-    }
+    UA_Server *server = UA_Server_new();
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    UA_ServerConfig_setDefault(config);
 
-    // Set accessControl functions for nodeManagement
+    /* Disable anonymous logins, enable two user/password logins */
+    config->accessControl.clear(&config->accessControl);
+    UA_StatusCode retval = UA_AccessControl_default(config, false,
+             &config->securityPolicies[config->securityPoliciesSize-1].policyUri, 2, logins);
+    if(retval != UA_STATUSCODE_GOOD)
+        goto cleanup;
+
+    /* Set accessControl functions for nodeManagement */
     config->accessControl.allowAddNode = allowAddNode;
     config->accessControl.allowAddReference = allowAddReference;
     config->accessControl.allowDeleteNode = allowDeleteNode;
     config->accessControl.allowDeleteReference = allowDeleteReference;
 
-    UA_Server *server = UA_Server_new(config);
+    retval = UA_Server_run(server, &running);
 
-    UA_StatusCode retval = UA_Server_run(server, &running);
+ cleanup:
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

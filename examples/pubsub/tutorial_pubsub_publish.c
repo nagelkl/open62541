@@ -24,11 +24,11 @@
  * ``tutorial_pubsub_connection.c``.
  */
 
-#include <ua_server.h>
-#include <ua_config_default.h>
-#include <ua_log_stdout.h>
-#include <ua_network_pubsub_udp.h>
-#include <ua_network_pubsub_ethernet.h>
+#include <open62541/plugin/log_stdout.h>
+#include <open62541/plugin/pubsub_ethernet.h>
+#include <open62541/plugin/pubsub_udp.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
 
 #include <signal.h>
 
@@ -46,7 +46,9 @@ addPubSubConnection(UA_Server *server, UA_String *transportProfile,
     connectionConfig.enabled = UA_TRUE;
     UA_Variant_setScalar(&connectionConfig.address, networkAddressUrl,
                          &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
-    connectionConfig.publisherId.numeric = UA_UInt32_random();
+    /* Changed to static publisherId from random generation to identify
+     * the publisher on Subscriber side */
+    connectionConfig.publisherId.numeric = 2234;
     UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
 }
 
@@ -106,11 +108,24 @@ addWriterGroup(UA_Server *server) {
     writerGroupConfig.enabled = UA_FALSE;
     writerGroupConfig.writerGroupId = 100;
     writerGroupConfig.encodingMimeType = UA_PUBSUB_ENCODING_UADP;
+    writerGroupConfig.messageSettings.encoding             = UA_EXTENSIONOBJECT_DECODED;
+    writerGroupConfig.messageSettings.content.decoded.type = &UA_TYPES[UA_TYPES_UADPWRITERGROUPMESSAGEDATATYPE];
     /* The configuration flags for the messages are encapsulated inside the
      * message- and transport settings extension objects. These extension
      * objects are defined by the standard. e.g.
      * UadpWriterGroupMessageDataType */
+    UA_UadpWriterGroupMessageDataType *writerGroupMessage  = UA_UadpWriterGroupMessageDataType_new();
+    /* Change message settings of writerGroup to send PublisherId,
+     * WriterGroupId in GroupHeader and DataSetWriterId in PayloadHeader
+     * of NetworkMessage */
+    writerGroupMessage->networkMessageContentMask          = (UA_UadpNetworkMessageContentMask)(UA_UADPNETWORKMESSAGECONTENTMASK_PUBLISHERID |
+                                                              (UA_UadpNetworkMessageContentMask)UA_UADPNETWORKMESSAGECONTENTMASK_GROUPHEADER |
+                                                              (UA_UadpNetworkMessageContentMask)UA_UADPNETWORKMESSAGECONTENTMASK_WRITERGROUPID |
+                                                              (UA_UadpNetworkMessageContentMask)UA_UADPNETWORKMESSAGECONTENTMASK_PAYLOADHEADER);
+    writerGroupConfig.messageSettings.content.decoded.data = writerGroupMessage;
     UA_Server_addWriterGroup(server, connectionIdent, &writerGroupConfig, &writerGroupIdent);
+    UA_Server_setWriterGroupOperational(server, writerGroupIdent);
+    UA_UadpWriterGroupMessageDataType_delete(writerGroupMessage);
 }
 
 /**
@@ -159,14 +174,16 @@ static int run(UA_String *transportProfile,
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
 
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
-    UA_ServerConfig *config = UA_ServerConfig_new_default();
+    UA_Server *server = UA_Server_new();
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    UA_ServerConfig_setDefault(config);
+
     /* Details about the connection configuration and handling are located in
      * the pubsub connection tutorial */
     config->pubsubTransportLayers =
         (UA_PubSubTransportLayer *) UA_calloc(2, sizeof(UA_PubSubTransportLayer));
     if(!config->pubsubTransportLayers) {
-        UA_ServerConfig_delete(config);
+        UA_Server_delete(server);
         return EXIT_FAILURE;
     }
     config->pubsubTransportLayers[0] = UA_PubSubTransportLayerUDPMP();
@@ -175,7 +192,6 @@ static int run(UA_String *transportProfile,
     config->pubsubTransportLayers[1] = UA_PubSubTransportLayerEthernet();
     config->pubsubTransportLayersSize++;
 #endif
-    UA_Server *server = UA_Server_new(config);
 
     addPubSubConnection(server, transportProfile, networkAddressUrl);
     addPublishedDataSet(server);
@@ -183,9 +199,9 @@ static int run(UA_String *transportProfile,
     addWriterGroup(server);
     addDataSetWriter(server);
 
-    retval |= UA_Server_run(server, &running);
+    UA_StatusCode retval = UA_Server_run(server, &running);
+
     UA_Server_delete(server);
-    UA_ServerConfig_delete(config);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 

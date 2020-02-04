@@ -1,10 +1,14 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
-#include <ua_client_highlevel.h>
-#include <ua_config_default.h>
-#include <ua_log_stdout.h>
-#include <ua_client_subscriptions.h>
+#include <open62541/client.h>
+#include <open62541/client_config_default.h>
+#include <open62541/client_highlevel.h>
+#include <open62541/client_subscriptions.h>
+#include <open62541/plugin/log_stdout.h>
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
+#include <open62541/util.h>
 
 #include <signal.h>
 
@@ -47,8 +51,14 @@ handler_events(UA_Client *client, UA_UInt32 subId, void *subContext,
                         "Message: '%.*s'", (int)lt->text.length, lt->text.data);
         }
         else {
+#ifdef UA_ENABLE_TYPEDESCRIPTION
             UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                         "Don't know how to handle type: '%s'", eventFields[i].type->typeName);
+#else
+            UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
+                        "Don't know how to handle type, enable UA_ENABLE_TYPEDESCRIPTION "
+                        "for typename");
+#endif
         }
     }
 }
