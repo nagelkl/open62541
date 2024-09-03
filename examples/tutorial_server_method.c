@@ -33,10 +33,6 @@
 #include <open62541/client_config_default.h>
 #include <open62541/plugin/log_stdout.h>
 #include <open62541/server.h>
-#include <open62541/server_config_default.h>
-
-#include <signal.h>
-#include <stdlib.h>
 
 static UA_StatusCode
 helloWorldMethodCallback(UA_Server *server,
@@ -59,7 +55,7 @@ helloWorldMethodCallback(UA_Server *server,
 }
 
 static void
-addHellWorldMethod(UA_Server *server) {
+addHelloWorldMethod(UA_Server *server) {
     UA_Argument inputArgument;
     UA_Argument_init(&inputArgument);
     inputArgument.description = UA_LOCALIZEDTEXT("en-US", "A String");
@@ -80,8 +76,8 @@ addHellWorldMethod(UA_Server *server) {
     helloAttr.executable = true;
     helloAttr.userExecutable = true;
     UA_Server_addMethodNode(server, UA_NODEID_NUMERIC(1,62541),
-                            UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
-                            UA_NODEID_NUMERIC(0, UA_NS0ID_HASORDEREDCOMPONENT),
+                            UA_NS0ID(OBJECTSFOLDER),
+                            UA_NS0ID(HASCOMPONENT),
                             UA_QUALIFIEDNAME(1, "hello world"),
                             helloAttr, &helloWorldMethodCallback,
                             1, &inputArgument, 1, &outputArgument, NULL, NULL);
@@ -154,8 +150,8 @@ addIncInt32ArrayMethod(UA_Server *server) {
     incAttr.executable = true;
     incAttr.userExecutable = true;
     UA_Server_addMethodNode(server, UA_NODEID_STRING(1, "IncInt32ArrayValues"),
-                            UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
-                            UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
+                            UA_NS0ID(OBJECTSFOLDER),
+                            UA_NS0ID(HASCOMPONENT),
                             UA_QUALIFIEDNAME(1, "IncInt32ArrayValues"),
                             incAttr, &IncInt32ArrayMethodCallback,
                             2, inputArguments, 1, &outputArgument,
@@ -164,24 +160,13 @@ addIncInt32ArrayMethod(UA_Server *server) {
 
 /** It follows the main server code, making use of the above definitions. */
 
-static volatile UA_Boolean running = true;
-static void stopHandler(int sign) {
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "received ctrl-c");
-    running = false;
-}
-
 int main(void) {
-    signal(SIGINT, stopHandler);
-    signal(SIGTERM, stopHandler);
-
     UA_Server *server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(server));
 
-    addHellWorldMethod(server);
+    addHelloWorldMethod(server);
     addIncInt32ArrayMethod(server);
 
-    UA_StatusCode retval = UA_Server_run(server, &running);
-
+    UA_Server_runUntilInterrupt(server);
     UA_Server_delete(server);
-    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
+    return 0;
 }

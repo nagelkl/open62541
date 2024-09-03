@@ -2,7 +2,17 @@
  * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
 
 #include <open62541/types.h>
-#include <open62541/types_generated_handling.h>
+#include <stdio.h>
+#include <errno.h>
+
+/* sleep_ms */
+#ifdef _WIN32
+# include <synchapi.h>
+# define sleep_ms(ms) Sleep(ms)
+#else
+# include <unistd.h>
+# define sleep_ms(ms) usleep(ms * 1000)
+#endif
 
 /* loadFile parses the certificate file.
  *
@@ -34,4 +44,24 @@ loadFile(const char *const path) {
     fclose(fp);
 
     return fileContents;
+}
+
+static UA_INLINE UA_StatusCode
+writeFile(const char* const path, const UA_ByteString buffer) {
+    FILE *fp = NULL;
+
+    fp = fopen(path, "wb");
+    if(fp == NULL)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    for(UA_UInt32 bufIndex = 0; bufIndex < buffer.length; bufIndex++) {
+        int retVal = fputc(buffer.data[bufIndex], fp);
+        if(retVal == EOF) {
+            fclose(fp);
+            return UA_STATUSCODE_BADINTERNALERROR;
+        }
+    }
+
+    fclose(fp);
+    return UA_STATUSCODE_GOOD;
 }

@@ -8,40 +8,21 @@
 
 #include "server/ua_subscription.h"
 #include "ua_server_internal.h"
+#include "test_helpers.h"
 
 #include <check.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 
-#include "testing_networklayers.h"
-#include "testing_policy.h"
-
-static UA_SecureChannel testChannel;
-static UA_SecurityPolicy dummyPolicy;
-static UA_Connection testingConnection;
-static funcs_called funcsCalled;
-static key_sizes keySizes;
 static UA_Server *server;
 
 static void setup(void) {
-    server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(server));
-
-    TestingPolicy(&dummyPolicy, UA_BYTESTRING_NULL, &funcsCalled, &keySizes);
-    UA_SecureChannel_init(&testChannel, &UA_ConnectionConfig_default);
-    UA_SecureChannel_setSecurityPolicy(&testChannel, &dummyPolicy, &UA_BYTESTRING_NULL);
-
-    testingConnection = createDummyConnection(65535, NULL);
-    UA_Connection_attachSecureChannel(&testingConnection, &testChannel);
-    testChannel.connection = &testingConnection;
+    server = UA_Server_newForUnitTest();
+    ck_assert(server != NULL);
 }
 
 static void teardown(void) {
-    UA_SecureChannel_close(&testChannel);
-    UA_SecureChannel_deleteMembers(&testChannel);
-    dummyPolicy.clear(&dummyPolicy);
-    testingConnection.close(&testingConnection);
-
     UA_Server_delete(server);
 }
 
@@ -81,14 +62,16 @@ START_TEST(monitorIntegerNoChanges) {
 
     callbackCount = 0;
 
-    UA_MonitoredItem *mon = LIST_FIRST(&server->localMonitoredItems);
+    UA_MonitoredItem *mon = LIST_FIRST(&server->adminSubscription->monitoredItems);
 
     clock_t begin, finish;
     begin = clock();
 
+    UA_LOCK(&server->serviceMutex);
     for(int i = 0; i < 1000; i++) {
-        UA_MonitoredItem_sampleCallback(server, mon);
+        UA_MonitoredItem_sample(server, mon);
     }
+    UA_UNLOCK(&server->serviceMutex);
 
     finish = clock();
 

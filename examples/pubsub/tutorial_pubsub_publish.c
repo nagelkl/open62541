@@ -13,8 +13,8 @@
  *
  * Publishing Fields
  * ^^^^^^^^^^^^^^^^^
- * The PubSub publish example demonstrate the simplest way to publish
- * informations from the information model over UDP multicast using the UADP
+ * The PubSub publish example demonstrates the simplest way to publish
+ * information from the information model over UDP multicast using the UADP
  * encoding.
  *
  * **Connection handling**
@@ -25,12 +25,11 @@
  */
 
 #include <open62541/plugin/log_stdout.h>
-#include <open62541/plugin/pubsub_ethernet.h>
-#include <open62541/plugin/pubsub_udp.h>
 #include <open62541/server.h>
-#include <open62541/server_config_default.h>
+#include <open62541/server_pubsub.h>
 
-#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 UA_NodeId connectionIdent, publishedDataSetIdent, writerGroupIdent;
 
@@ -48,7 +47,8 @@ addPubSubConnection(UA_Server *server, UA_String *transportProfile,
                          &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
     /* Changed to static publisherId from random generation to identify
      * the publisher on Subscriber side */
-    connectionConfig.publisherId.numeric = 2234;
+    connectionConfig.publisherId.idType = UA_PUBLISHERIDTYPE_UINT16;
+    connectionConfig.publisherId.id.uint16 = 2234;
     UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
 }
 
@@ -62,7 +62,7 @@ addPubSubConnection(UA_Server *server, UA_String *transportProfile,
 static void
 addPublishedDataSet(UA_Server *server) {
     /* The PublishedDataSetConfig contains all necessary public
-    * informations for the creation of a new PublishedDataSet */
+    * information for the creation of a new PublishedDataSet */
     UA_PublishedDataSetConfig publishedDataSetConfig;
     memset(&publishedDataSetConfig, 0, sizeof(UA_PublishedDataSetConfig));
     publishedDataSetConfig.publishedDataSetType = UA_PUBSUB_DATASET_PUBLISHEDITEMS;
@@ -86,7 +86,7 @@ addDataSetField(UA_Server *server) {
     dataSetFieldConfig.field.variable.fieldNameAlias = UA_STRING("Server localtime");
     dataSetFieldConfig.field.variable.promotedField = UA_FALSE;
     dataSetFieldConfig.field.variable.publishParameters.publishedVariable =
-    UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_SERVERSTATUS_CURRENTTIME);
+    UA_NS0ID(SERVER_SERVERSTATUS_CURRENTTIME);
     dataSetFieldConfig.field.variable.publishParameters.attributeId = UA_ATTRIBUTEID_VALUE;
     UA_Server_addDataSetField(server, publishedDataSetIdent,
                               &dataSetFieldConfig, &dataSetFieldIdent);
@@ -124,7 +124,7 @@ addWriterGroup(UA_Server *server) {
                                                               (UA_UadpNetworkMessageContentMask)UA_UADPNETWORKMESSAGECONTENTMASK_PAYLOADHEADER);
     writerGroupConfig.messageSettings.content.decoded.data = writerGroupMessage;
     UA_Server_addWriterGroup(server, connectionIdent, &writerGroupConfig, &writerGroupIdent);
-    UA_Server_setWriterGroupOperational(server, writerGroupIdent);
+    UA_Server_enableWriterGroup(server, writerGroupIdent);
     UA_UadpWriterGroupMessageDataType_delete(writerGroupMessage);
 }
 
@@ -132,7 +132,7 @@ addWriterGroup(UA_Server *server) {
  * **DataSetWriter handling**
  *
  * A DataSetWriter (DSW) is the glue between the WG and the PDS. The DSW is
- * linked to exactly one PDS and contains additional informations for the
+ * linked to exactly one PDS and contains additional information for the
  * message generation. */
 static void
 addDataSetWriter(UA_Server *server) {
@@ -159,39 +159,14 @@ addDataSetWriter(UA_Server *server) {
  *     :alt: OPC UA PubSub communication in wireshark
  *
  * The open62541 subscriber API will be released later. If you want to process
- * the the datagrams, take a look on the ua_network_pubsub_networkmessage.c
+ * the the datagrams, take a look on the ``ua_network_pubsub_networkmessage.c``
  * which already contains the decoding code for UADP messages.
  *
  * It follows the main server code, making use of the above definitions. */
-UA_Boolean running = true;
-static void stopHandler(int sign) {
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "received ctrl-c");
-    running = false;
-}
 
 static int run(UA_String *transportProfile,
                UA_NetworkAddressUrlDataType *networkAddressUrl) {
-    signal(SIGINT, stopHandler);
-    signal(SIGTERM, stopHandler);
-
     UA_Server *server = UA_Server_new();
-    UA_ServerConfig *config = UA_Server_getConfig(server);
-    UA_ServerConfig_setDefault(config);
-
-    /* Details about the connection configuration and handling are located in
-     * the pubsub connection tutorial */
-    config->pubsubTransportLayers =
-        (UA_PubSubTransportLayer *) UA_calloc(2, sizeof(UA_PubSubTransportLayer));
-    if(!config->pubsubTransportLayers) {
-        UA_Server_delete(server);
-        return EXIT_FAILURE;
-    }
-    config->pubsubTransportLayers[0] = UA_PubSubTransportLayerUDPMP();
-    config->pubsubTransportLayersSize++;
-#ifdef UA_ENABLE_PUBSUB_ETH_UADP
-    config->pubsubTransportLayers[1] = UA_PubSubTransportLayerEthernet();
-    config->pubsubTransportLayersSize++;
-#endif
 
     addPubSubConnection(server, transportProfile, networkAddressUrl);
     addPublishedDataSet(server);
@@ -199,7 +174,7 @@ static int run(UA_String *transportProfile,
     addWriterGroup(server);
     addDataSetWriter(server);
 
-    UA_StatusCode retval = UA_Server_run(server, &running);
+    UA_StatusCode retval = UA_Server_runUntilInterrupt(server);
 
     UA_Server_delete(server);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -229,12 +204,14 @@ int main(int argc, char **argv) {
                 printf("Error: UADP/ETH needs an interface name\n");
                 return EXIT_FAILURE;
             }
-            networkAddressUrl.networkInterface = UA_STRING(argv[2]);
             networkAddressUrl.url = UA_STRING(argv[1]);
         } else {
             printf("Error: unknown URI\n");
             return EXIT_FAILURE;
         }
+    }
+    if (argc > 2) {
+        networkAddressUrl.networkInterface = UA_STRING(argv[2]);
     }
 
     return run(&transportProfile, &networkAddressUrl);

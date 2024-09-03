@@ -6,7 +6,10 @@
 #include <open62541/client_config_default.h>
 #include <open62541/client_highlevel.h>
 #include <check.h>
+#include <stdlib.h>
 #include <testing_clock.h>
+
+#include "test_helpers.h"
 #include "thread_wrapper.h"
 #include "mt_testing.h"
 
@@ -22,7 +25,7 @@
 UA_NodeId pumpTypeId = {1, UA_NODEIDTYPE_NUMERIC, {1001}};
 UA_Int32 temperature = 42;
 
-UA_LOCK_TYPE(mu)
+UA_Lock mu;
 
 static UA_StatusCode
 readTemperature(UA_Server *tmpServer,
@@ -30,9 +33,9 @@ readTemperature(UA_Server *tmpServer,
                 const UA_NodeId *nodeId, void *nodeContext,
                 UA_Boolean sourceTimeStamp, const UA_NumericRange *range,
                 UA_DataValue *dataValue) {
-    UA_LOCK(mu);
+    UA_LOCK(&mu);
     UA_Variant_setScalarCopy(&dataValue->value, &temperature, &UA_TYPES[UA_TYPES_INT32]);
-    UA_UNLOCK(mu);
+    UA_UNLOCK(&mu);
     dataValue->hasValue = true;
     return UA_STATUSCODE_GOOD;
 }
@@ -42,9 +45,9 @@ writeTemperature(UA_Server *tmpServer,
                  const UA_NodeId *sessionId, void *sessionContext,
                  const UA_NodeId *nodeId, void *nodeContext,
                  const UA_NumericRange *range, const UA_DataValue *data) {
-    UA_LOCK(mu);
+    UA_LOCK(&mu);
     temperature = *(UA_Int32 *) data->value.data;
-    UA_UNLOCK(mu);
+    UA_UNLOCK(&mu);
     return UA_STATUSCODE_GOOD;
 }
 
@@ -67,8 +70,8 @@ void AddVariableNode(void) {
 
 static void setup(void) {
     tc.running = true;
-    tc.server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(tc.server));
+    tc.server = UA_Server_newForUnitTest();
+    ck_assert(tc.server != NULL);
     AddVariableNode();
     UA_Server_run_startup(tc.server);
     THREAD_CREATE(server_thread, serverloop);
@@ -93,7 +96,7 @@ void server_readValue(void *value) {
     if (retval == UA_STATUSCODE_GOOD) {
         ck_assert_int_eq(42, *(UA_Int32 *)var.data);
         ck_assert_int_eq(UA_STATUSCODE_GOOD, retval);
-        UA_Variant_deleteMembers(&var);
+        UA_Variant_clear(&var);
     }
     else {
         ck_assert_int_eq(retval, UA_STATUSCODE_BADNODEIDUNKNOWN);
@@ -131,7 +134,7 @@ void client_readValue(void *value) {
     UA_StatusCode retval = UA_Client_readValueAttribute(tc.clients[tmp.index], nodeId, &val);
     if (retval == UA_STATUSCODE_GOOD) {
         ck_assert_int_eq(42, *(UA_Int32 *)val.data);
-        UA_Variant_deleteMembers(&val);
+        UA_Variant_clear(&val);
     }
     else {
         ck_assert_int_eq(retval, UA_STATUSCODE_BADNODEIDUNKNOWN);
@@ -141,9 +144,7 @@ void client_readValue(void *value) {
 
 static
 void initTest(void) {
-    UA_LOCK_INIT(mu);
-
-    initThreadContext(NUMBER_OF_READ_WORKERS + NUMBER_OF_WRITE_WORKERS + 1, NUMBER_OF_READ_CLIENTS + NUMBER_OF_WRITE_CLIENTS, NULL);
+    UA_LOCK_INIT(&mu);
 
     size_t i = 0;
     for (; i < NUMBER_OF_READ_WORKERS; i++) {
@@ -173,7 +174,6 @@ END_TEST
 static Suite* testSuite_immutableNodes(void) {
     Suite *s = suite_create("Multithreading");
     TCase *valueCallback = tcase_create("Read-Write-Delete-Callback");
-    initTest();
     tcase_add_checked_fixture(valueCallback, setup, teardown);
     tcase_add_test(valueCallback, readWriteDeleteCallback);
     suite_add_tcase(s,valueCallback);
@@ -184,7 +184,13 @@ int main(void) {
     Suite *s = testSuite_immutableNodes();
     SRunner *sr = srunner_create(s);
     srunner_set_fork_status(sr, CK_NOFORK);
+
+    createThreadContext(NUMBER_OF_READ_WORKERS + NUMBER_OF_WRITE_WORKERS + 1,
+                        NUMBER_OF_READ_CLIENTS + NUMBER_OF_WRITE_CLIENTS, NULL);
+    initTest();
     srunner_run_all(sr, CK_NORMAL);
+    deleteThreadContext();
+
     int number_failed = srunner_ntests_failed(sr);
     srunner_free(sr);
     return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;

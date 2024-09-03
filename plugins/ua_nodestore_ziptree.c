@@ -1,11 +1,12 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
- * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. 
+ * See http://creativecommons.org/publicdomain/zero/1.0/ for more information.
  *
  *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2017 (c) Julian Grothoff
  *    Copyright 2017 (c) Stefan Profanter, fortiss GmbH
  */
 
+#include <open62541/types.h>
 #include <open62541/plugin/nodestore_default.h>
 #include "ziptree.h"
 
@@ -49,10 +50,13 @@ typedef struct NodeTree NodeTree;
 
 typedef struct {
     NodeTree root;
+
+    /* Maps ReferenceTypeIndex to the NodeId of the ReferenceType */
+    UA_NodeId referenceTypeIds[UA_REFERENCETYPESET_MAX];
+    UA_Byte referenceTypeCounter;
 } ZipContext;
 
-ZIP_PROTTYPE(NodeTree, NodeEntry, NodeEntry)
-ZIP_IMPL(NodeTree, NodeEntry, zipfields, NodeEntry, zipfields, cmpNodeId)
+ZIP_FUNCTIONS(NodeTree, NodeEntry, zipfields, NodeEntry, zipfields, cmpNodeId)
 
 static NodeEntry *
 newEntry(UA_NodeClass nodeClass) {
@@ -89,7 +93,7 @@ newEntry(UA_NodeClass nodeClass) {
     if(!entry)
         return NULL;
     UA_Node *node = (UA_Node*)&entry->nodeId;
-    node->nodeClass = nodeClass;
+    node->head.nodeClass = nodeClass;
     return entry;
 }
 
@@ -101,8 +105,18 @@ deleteEntry(NodeEntry *entry) {
 
 static void
 cleanupEntry(NodeEntry *entry) {
-    if(entry->deleted && entry->refCount == 0)
+    if(entry->refCount > 0)
+        return;
+    if(entry->deleted) {
         deleteEntry(entry);
+        return;
+    }
+    UA_NodeHead *head = (UA_NodeHead*)&entry->nodeId;
+    for(size_t i = 0; i < head->referencesSize; i++) {
+        UA_NodeReferenceKind *rk = &head->references[i];
+        if(rk->targetsSize > 16 && !rk->hasRefTree)
+            UA_NodeReferenceKind_switch(rk);
+    }
 }
 
 /***********************/
@@ -125,7 +139,10 @@ zipNsDeleteNode(void *nsCtx, UA_Node *node) {
 }
 
 static const UA_Node *
-zipNsGetNode(void *nsCtx, const UA_NodeId *nodeId) {
+zipNsGetNode(void *nsCtx, const UA_NodeId *nodeId,
+             UA_UInt32 attributeMask,
+             UA_ReferenceTypeSet references,
+             UA_BrowseDirection referenceDirections) {
     ZipContext *ns = (ZipContext*)nsCtx;
     NodeEntry dummy;
     dummy.nodeIdHash = UA_NodeId_hash(nodeId);
@@ -135,6 +152,18 @@ zipNsGetNode(void *nsCtx, const UA_NodeId *nodeId) {
         return NULL;
     ++entry->refCount;
     return (const UA_Node*)&entry->nodeId;
+}
+
+static const UA_Node *
+zipNsGetNodeFromPtr(void *nsCtx, UA_NodePointer ptr,
+                    UA_UInt32 attributeMask,
+                    UA_ReferenceTypeSet references,
+                    UA_BrowseDirection referenceDirections) {
+    if(!UA_NodePointer_isLocal(ptr))
+        return NULL;
+    UA_NodeId id = UA_NodePointer_toNodeId(ptr);
+    return zipNsGetNode(nsCtx, &id, attributeMask,
+                        references, referenceDirections);
 }
 
 static void
@@ -149,14 +178,17 @@ zipNsReleaseNode(void *nsCtx, const UA_Node *node) {
 
 static UA_StatusCode
 zipNsGetNodeCopy(void *nsCtx, const UA_NodeId *nodeId,
-                         UA_Node **outNode) {
-    /* Find the node */
-    const UA_Node *node = zipNsGetNode(nsCtx, nodeId);
+                 UA_Node **outNode) {
+    /* Get the node (with all attributes and references, the mask and refs are
+       currently noy evaluated within the plugin.) */
+    const UA_Node *node =
+        zipNsGetNode(nsCtx, nodeId, UA_NODEATTRIBUTESMASK_ALL,
+                     UA_REFERENCETYPESET_ALL, UA_BROWSEDIRECTION_BOTH);
     if(!node)
         return UA_STATUSCODE_BADNODEIDUNKNOWN;
 
     /* Create the new entry */
-    NodeEntry *ne = newEntry(node->nodeClass);
+    NodeEntry *ne = newEntry(node->head.nodeClass);
     if(!ne) {
         zipNsReleaseNode(nsCtx, node);
         return UA_STATUSCODE_BADOUTOFMEMORY;
@@ -183,16 +215,25 @@ zipNsInsertNode(void *nsCtx, UA_Node *node, UA_NodeId *addedNodeId) {
 
     /* Ensure that the NodeId is unique */
     NodeEntry dummy;
-    dummy.nodeId = node->nodeId;
-    if(node->nodeId.identifierType == UA_NODEIDTYPE_NUMERIC &&
-       node->nodeId.identifier.numeric == 0) {
+    memset(&dummy, 0, sizeof(NodeEntry));
+    dummy.nodeId = node->head.nodeId;
+    if(node->head.nodeId.identifierType == UA_NODEIDTYPE_NUMERIC &&
+       node->head.nodeId.identifier.numeric == 0) {
         do { /* Create a random nodeid until we find an unoccupied id */
-            node->nodeId.identifier.numeric = UA_UInt32_random();
-            dummy.nodeId.identifier.numeric = node->nodeId.identifier.numeric;
-            dummy.nodeIdHash = UA_NodeId_hash(&node->nodeId);
+            UA_UInt32 numId = UA_UInt32_random();
+#if SIZE_MAX <= UA_UINT32_MAX
+            /* The compressed "immediate" representation of nodes does not
+             * support the full range on 32bit systems. Generate smaller
+             * identifiers as they can be stored more compactly. */
+            if(numId >= (0x01 << 24))
+                numId = numId % (0x01 << 24);
+#endif
+            node->head.nodeId.identifier.numeric = numId;
+            dummy.nodeId.identifier.numeric = numId;
+            dummy.nodeIdHash = UA_NodeId_hash(&node->head.nodeId);
         } while(ZIP_FIND(NodeTree, &ns->root, &dummy));
     } else {
-        dummy.nodeIdHash = UA_NodeId_hash(&node->nodeId);
+        dummy.nodeIdHash = UA_NodeId_hash(&node->head.nodeId);
         if(ZIP_FIND(NodeTree, &ns->root, &dummy)) { /* The nodeid exists */
             deleteEntry(entry);
             return UA_STATUSCODE_BADNODEIDEXISTS;
@@ -201,23 +242,47 @@ zipNsInsertNode(void *nsCtx, UA_Node *node, UA_NodeId *addedNodeId) {
 
     /* Copy the NodeId */
     if(addedNodeId) {
-        UA_StatusCode retval = UA_NodeId_copy(&node->nodeId, addedNodeId);
+        UA_StatusCode retval = UA_NodeId_copy(&node->head.nodeId, addedNodeId);
         if(retval != UA_STATUSCODE_GOOD) {
             deleteEntry(entry);
             return retval;
         }
     }
 
+    /* For new ReferencetypeNodes add to the index map */
+    if(node->head.nodeClass == UA_NODECLASS_REFERENCETYPE) {
+        UA_ReferenceTypeNode *refNode = &node->referenceTypeNode;
+        if(ns->referenceTypeCounter >= UA_REFERENCETYPESET_MAX) {
+            deleteEntry(entry);
+            return UA_STATUSCODE_BADINTERNALERROR;
+        }
+
+        UA_StatusCode retval =
+            UA_NodeId_copy(&node->head.nodeId, &ns->referenceTypeIds[ns->referenceTypeCounter]);
+        if(retval != UA_STATUSCODE_GOOD) {
+            deleteEntry(entry);
+            return UA_STATUSCODE_BADINTERNALERROR;
+        }
+
+        /* Assign the ReferenceTypeIndex to the new ReferenceTypeNode */
+        refNode->referenceTypeIndex = ns->referenceTypeCounter;
+        refNode->subTypes = UA_REFTYPESET(ns->referenceTypeCounter);
+
+        ns->referenceTypeCounter++;
+    }
+
     /* Insert the node */
     entry->nodeIdHash = dummy.nodeIdHash;
-    ZIP_INSERT(NodeTree, &ns->root, entry, ZIP_FFS32(UA_UInt32_random()));
+    ZIP_INSERT(NodeTree, &ns->root, entry);
     return UA_STATUSCODE_GOOD;
 }
 
 static UA_StatusCode
 zipNsReplaceNode(void *nsCtx, UA_Node *node) {
-    /* Find the node */
-    const UA_Node *oldNode = zipNsGetNode(nsCtx, &node->nodeId);
+    /* Find the node (the mask and refs are not evaluated yet by the plugin)*/
+    const UA_Node *oldNode =
+        zipNsGetNode(nsCtx, &node->head.nodeId, UA_NODEATTRIBUTESMASK_ALL,
+                     UA_REFERENCETYPESET_ALL, UA_BROWSEDIRECTION_BOTH);
     if(!oldNode) {
         deleteEntry(container_of(node, NodeEntry, nodeId));
         return UA_STATUSCODE_BADNODEIDUNKNOWN;
@@ -237,7 +302,7 @@ zipNsReplaceNode(void *nsCtx, UA_Node *node) {
     ZipContext *ns = (ZipContext*)nsCtx;
     ZIP_REMOVE(NodeTree, &ns->root, oldEntry);
     entry->nodeIdHash = oldEntry->nodeIdHash;
-    ZIP_INSERT(NodeTree, &ns->root, entry, ZIP_RANK(entry, zipfields));
+    ZIP_INSERT(NodeTree, &ns->root, entry);
     oldEntry->deleted = true;
 
     zipNsReleaseNode(nsCtx, oldNode);
@@ -259,15 +324,24 @@ zipNsRemoveNode(void *nsCtx, const UA_NodeId *nodeId) {
     return UA_STATUSCODE_GOOD;
 }
 
+static const UA_NodeId *
+zipNsGetReferenceTypeId(void *nsCtx, UA_Byte refTypeIndex) {
+    ZipContext *ns = (ZipContext*)nsCtx;
+    if(refTypeIndex >= ns->referenceTypeCounter)
+        return NULL;
+    return &ns->referenceTypeIds[refTypeIndex];
+}
+
 struct VisitorData {
     UA_NodestoreVisitor visitor;
     void *visitorContext;
 };
 
-static void
-nodeVisitor(NodeEntry *entry, void *data) {
+static void *
+nodeVisitor(void *data, NodeEntry *entry) {
     struct VisitorData *d = (struct VisitorData*)data;
     d->visitor(d->visitorContext, (UA_Node*)&entry->nodeId);
+    return NULL;
 }
 
 static void
@@ -280,9 +354,10 @@ zipNsIterate(void *nsCtx, UA_NodestoreVisitor visitor,
     ZIP_ITER(NodeTree, &ns->root, nodeVisitor, &d);
 }
 
-static void
-deleteNodeVisitor(NodeEntry *entry, void *data) {
+static void *
+deleteNodeVisitor(void *data, NodeEntry *entry) {
     deleteEntry(entry);
+    return NULL;
 }
 
 /***********************/
@@ -295,6 +370,11 @@ zipNsClear(void *nsCtx) {
         return;
     ZipContext *ns = (ZipContext*)nsCtx;
     ZIP_ITER(NodeTree, &ns->root, deleteNodeVisitor, NULL);
+
+    /* Clean up the ReferenceTypes index array */
+    for(size_t i = 0; i < ns->referenceTypeCounter; i++)
+        UA_NodeId_clear(&ns->referenceTypeIds[i]);
+
     UA_free(ns);
 }
 
@@ -306,6 +386,7 @@ UA_Nodestore_ZipTree(UA_Nodestore *ns) {
         return UA_STATUSCODE_BADOUTOFMEMORY;
 
     ZIP_INIT(&ctx->root);
+    ctx->referenceTypeCounter = 0;
 
     /* Populate the nodestore */
     ns->context = (void*)ctx;
@@ -313,12 +394,27 @@ UA_Nodestore_ZipTree(UA_Nodestore *ns) {
     ns->newNode = zipNsNewNode;
     ns->deleteNode = zipNsDeleteNode;
     ns->getNode = zipNsGetNode;
+    ns->getNodeFromPtr = zipNsGetNodeFromPtr;
     ns->releaseNode = zipNsReleaseNode;
     ns->getNodeCopy = zipNsGetNodeCopy;
     ns->insertNode = zipNsInsertNode;
     ns->replaceNode = zipNsReplaceNode;
     ns->removeNode = zipNsRemoveNode;
+    ns->getReferenceTypeId = zipNsGetReferenceTypeId;
     ns->iterate = zipNsIterate;
-    
+
+    /* All nodes are stored in RAM. Changes are made in-situ. GetEditNode is
+     * identical to GetNode -- but the Node pointer is non-const. */
+    ns->getEditNode =
+        (UA_Node * (*)(void *nsCtx, const UA_NodeId *nodeId,
+                       UA_UInt32 attributeMask,
+                       UA_ReferenceTypeSet references,
+                       UA_BrowseDirection referenceDirections))zipNsGetNode;
+    ns->getEditNodeFromPtr =
+        (UA_Node * (*)(void *nsCtx, UA_NodePointer ptr,
+                       UA_UInt32 attributeMask,
+                       UA_ReferenceTypeSet references,
+                       UA_BrowseDirection referenceDirections))zipNsGetNodeFromPtr;
+
     return UA_STATUSCODE_GOOD;
 }

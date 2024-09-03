@@ -7,25 +7,24 @@
  * Copyright (c) 2019 Kalycito Infotech Private Limited
  */
 
-#include "open62541/server.h"
-#include "open62541/types_generated_encoding_binary.h"
-#include "open62541/server_config_default.h"
-#include "ua_network_pubsub_mqtt.h"
+#include <open62541/server.h>
+#include <open62541/server_config_default.h>
+
+#include "test_helpers.h"
 #include "ua_server_internal.h"
-#include "check.h"
+
+#include <check.h>
+#include <stdlib.h>
+
+//#define TEST_MQTT_SERVER "opc.mqtt://test.mosquitto.org:1883"
+#define TEST_MQTT_SERVER "opc.mqtt://localhost:1883"
 
 UA_Server *server = NULL;
 UA_ServerConfig *config = NULL;
 
 static void setup(void) {
-    server = UA_Server_new();
-    config = UA_Server_getConfig(server);
-    config->pubsubTransportLayers = (UA_PubSubTransportLayer *) UA_malloc(1 * sizeof(UA_PubSubTransportLayer));
-    if(!config->pubsubTransportLayers) {
-        UA_Server_delete(server);
-    }
-    config->pubsubTransportLayers[0] = UA_PubSubTransportLayerMQTT();
-    config->pubsubTransportLayersSize++;
+    server = UA_Server_newForUnitTest();
+    ck_assert(server != NULL);
     UA_Server_run_startup(server);
 }
 
@@ -35,88 +34,100 @@ static void teardown(void) {
 }
 
 START_TEST(AddConnectionsWithMinimalValidConfiguration){
-    UA_StatusCode retVal;
     UA_PubSubConnectionConfig connectionConfig;
     memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
     connectionConfig.name = UA_STRING("Mqtt Connection");
-    UA_NetworkAddressUrlDataType networkAddressUrl = {UA_STRING_NULL, UA_STRING("opc.mqtt://test.mosquitto.org:1883/")};
+    UA_NetworkAddressUrlDataType networkAddressUrl =
+        {UA_STRING_NULL, UA_STRING(TEST_MQTT_SERVER)};
     UA_Variant_setScalar(&connectionConfig.address, &networkAddressUrl,
                          &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
-    connectionConfig.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt");
-    retVal = UA_Server_addPubSubConnection(server, &connectionConfig, NULL);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 1);
+    connectionConfig.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt-uadp");
+    UA_StatusCode retVal =
+        UA_Server_addPubSubConnection(server, &connectionConfig, NULL);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 1);
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
     ck_assert(! TAILQ_EMPTY(&server->pubSubManager.connections));
     retVal = UA_Server_addPubSubConnection(server, &connectionConfig, NULL);
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
     ck_assert(&server->pubSubManager.connections.tqh_first->listEntry.tqe_next != NULL);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 2);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 2);
 } END_TEST
 
 START_TEST(AddRemoveAddConnectionWithMinimalValidConfiguration){
-    UA_StatusCode retVal;
     UA_PubSubConnectionConfig connectionConfig;
     memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
     connectionConfig.name = UA_STRING("Mqtt Connection");
-    UA_NetworkAddressUrlDataType networkAddressUrl = {UA_STRING_NULL, UA_STRING("opc.mqtt://test.mosquitto.org:1883/")};
+    UA_NetworkAddressUrlDataType networkAddressUrl =
+        {UA_STRING_NULL, UA_STRING(TEST_MQTT_SERVER)};
     UA_Variant_setScalar(&connectionConfig.address, &networkAddressUrl,
                          &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
-    connectionConfig.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt");
+    connectionConfig.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt-uadp");
     UA_NodeId connectionIdent;
-    retVal = UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 1);
+    UA_StatusCode retVal =
+        UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 1);
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
     ck_assert(! TAILQ_EMPTY(&server->pubSubManager.connections));
     retVal |= UA_Server_removePubSubConnection(server, connectionIdent);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 0);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 0);
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
     retVal = UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 1);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 1);
     ck_assert(! TAILQ_EMPTY(&server->pubSubManager.connections));
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
 } END_TEST
 
-START_TEST(AddConnectionWithInvalidAddress){
+START_TEST(AddConnectionWithInvalidAddress) {
+    /* This succeeds as the connection is only actually connected when there
+     * is a Reader/WriterGroup */
     UA_StatusCode retVal;
     UA_PubSubConnectionConfig connectionConfig;
     memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
     connectionConfig.name = UA_STRING("MQTT Connection");
-    UA_NetworkAddressUrlDataType networkAddressUrl = {UA_STRING_NULL, UA_STRING("opc.mqtt://127.0..1:1883/")};
+    UA_NetworkAddressUrlDataType networkAddressUrl =
+        {UA_STRING_NULL, UA_STRING("opc.mqtt://127.0..1:1883/")};
     UA_Variant_setScalar(&connectionConfig.address, &networkAddressUrl,
                          &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
-    connectionConfig.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-invalid");
+    connectionConfig.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt-uadp");
+
     retVal = UA_Server_addPubSubConnection(server, &connectionConfig, NULL);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 0);
-    ck_assert_int_ne(retVal, UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 1);
+    ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
     retVal = UA_Server_addPubSubConnection(server, &connectionConfig, NULL);
-    ck_assert_int_ne(retVal, UA_STATUSCODE_GOOD);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 0);
+
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 2);
+    ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
 } END_TEST
 
 START_TEST(AddConnectionWithUnknownTransportURL){
-        UA_StatusCode retVal;
-        UA_PubSubConnectionConfig connectionConfig;
-        memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
-        connectionConfig.name = UA_STRING("MQTT Connection");
-        UA_NetworkAddressUrlDataType networkAddressUrl = {UA_STRING_NULL, UA_STRING("opc.mqtt://test.mosquitto.org:1883/")};
-        UA_Variant_setScalar(&connectionConfig.address, &networkAddressUrl,
-                             &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
-        connectionConfig.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/unknown-udp-uadp");
-        UA_NodeId connectionIdent;
-        retVal = UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
-        ck_assert_int_eq(server->pubSubManager.connectionsSize, 0);
-        ck_assert_int_ne(retVal, UA_STATUSCODE_GOOD);
+    UA_PubSubConnectionConfig connectionConfig;
+    memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
+    connectionConfig.name = UA_STRING("MQTT Connection");
+    UA_NetworkAddressUrlDataType networkAddressUrl =
+        {UA_STRING_NULL, UA_STRING(TEST_MQTT_SERVER)};
+    UA_Variant_setScalar(&connectionConfig.address, &networkAddressUrl,
+                         &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
+    connectionConfig.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/unknown-udp-uadp");
+    UA_NodeId connectionIdent;
+    UA_StatusCode retVal =
+        UA_Server_addPubSubConnection(server, &connectionConfig, &connectionIdent);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 0);
+    ck_assert_int_ne(retVal, UA_STATUSCODE_GOOD);
 } END_TEST
 
 START_TEST(AddConnectionWithNullConfig){
-        UA_StatusCode retVal;
-        retVal = UA_Server_addPubSubConnection(server, NULL, NULL);
-        ck_assert_int_eq(server->pubSubManager.connectionsSize, 0);
-        ck_assert_int_ne(retVal, UA_STATUSCODE_GOOD);
-    } END_TEST
+    UA_StatusCode retVal = UA_Server_addPubSubConnection(server, NULL, NULL);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 0);
+    ck_assert_int_ne(retVal, UA_STATUSCODE_GOOD);
+} END_TEST
 
 START_TEST(AddSingleConnectionWithMaximalConfiguration){
-    UA_NetworkAddressUrlDataType networkAddressUrlData = {UA_STRING("127.0.0.1"), UA_STRING("opc.mqtt://test.mosquitto.org:1883/")};
+    UA_NetworkAddressUrlDataType networkAddressUrlData =
+        {UA_STRING("127.0.0.1"), UA_STRING(TEST_MQTT_SERVER)};
     UA_Variant address;
     UA_Variant_setScalar(&address, &networkAddressUrlData, &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
     UA_KeyValuePair connectionOptions[3];
@@ -133,21 +144,24 @@ START_TEST(AddSingleConnectionWithMaximalConfiguration){
     UA_PubSubConnectionConfig connectionConf;
     memset(&connectionConf, 0, sizeof(UA_PubSubConnectionConfig));
     connectionConf.name = UA_STRING("MQTT Connection");
-    connectionConf.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt");
+    connectionConf.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt-uadp");
     connectionConf.enabled = true;
-    connectionConf.publisherId.numeric = 223344;
-    connectionConf.connectionPropertiesSize = 3;
-    connectionConf.connectionProperties = connectionOptions;
+    connectionConf.publisherId.idType = UA_PUBLISHERIDTYPE_UINT32;
+    connectionConf.publisherId.id.uint32 = 223344;
+    connectionConf.connectionProperties.map = connectionOptions;
+    connectionConf.connectionProperties.mapSize = 3;
     connectionConf.address = address;
     UA_NodeId connection;
     UA_StatusCode retVal = UA_Server_addPubSubConnection(server, &connectionConf, &connection);
-    ck_assert_int_eq(server->pubSubManager.connectionsSize, 1);
+    ck_assert_uint_eq(server->pubSubManager.connectionsSize, 1);
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
     ck_assert(! TAILQ_EMPTY(&server->pubSubManager.connections));
 } END_TEST
 
 START_TEST(GetMaximalConnectionConfigurationAndCompareValues){
-    UA_NetworkAddressUrlDataType networkAddressUrlData = {UA_STRING("127.0.0.1"), UA_STRING("opc.mqtt://test.mosquitto.org:1883/")};
+    UA_NetworkAddressUrlDataType networkAddressUrlData =
+        {UA_STRING("127.0.0.1"), UA_STRING(TEST_MQTT_SERVER)};
     UA_Variant address;
     UA_Variant_setScalar(&address, &networkAddressUrlData, &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
     UA_KeyValuePair connectionOptions[3];
@@ -164,11 +178,13 @@ START_TEST(GetMaximalConnectionConfigurationAndCompareValues){
     UA_PubSubConnectionConfig connectionConf;
     memset(&connectionConf, 0, sizeof(UA_PubSubConnectionConfig));
     connectionConf.name = UA_STRING("MQTT Connection");
-    connectionConf.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt");
+    connectionConf.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-mqtt-uadp");
     connectionConf.enabled = true;
-    connectionConf.publisherId.numeric = 223344;
-    connectionConf.connectionPropertiesSize = 3;
-    connectionConf.connectionProperties = connectionOptions;
+    connectionConf.publisherId.idType = UA_PUBLISHERIDTYPE_UINT32;
+    connectionConf.publisherId.id.uint32 = 223344;
+    connectionConf.connectionProperties.map = connectionOptions;
+    connectionConf.connectionProperties.mapSize = 3;
     connectionConf.address = address;
     UA_NodeId connection;
     UA_StatusCode retVal = UA_Server_addPubSubConnection(server, &connectionConf, &connection);
@@ -177,40 +193,55 @@ START_TEST(GetMaximalConnectionConfigurationAndCompareValues){
     memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
     retVal |= UA_Server_getPubSubConnectionConfig(server, connection, &connectionConfig);
     ck_assert_int_eq(retVal, UA_STATUSCODE_GOOD);
-    ck_assert(connectionConfig.connectionPropertiesSize == connectionConf.connectionPropertiesSize);
+    ck_assert(connectionConfig.connectionProperties.mapSize == connectionConf.connectionProperties.mapSize);
     ck_assert(UA_String_equal(&connectionConfig.name, &connectionConf.name) == UA_TRUE);
     ck_assert(UA_String_equal(&connectionConfig.transportProfileUri, &connectionConf.transportProfileUri) == UA_TRUE);
-    UA_NetworkAddressUrlDataType networkAddressUrlDataCopy = *((UA_NetworkAddressUrlDataType *)connectionConfig.address.data);
-    ck_assert(UA_NetworkAddressUrlDataType_calcSizeBinary(&networkAddressUrlDataCopy) == UA_NetworkAddressUrlDataType_calcSizeBinary(&networkAddressUrlData));
-    for(size_t i = 0; i < connectionConfig.connectionPropertiesSize; i++){
-        ck_assert(UA_String_equal(&connectionConfig.connectionProperties[i].key.name, &connectionConf.connectionProperties[i].key.name) == UA_TRUE);
-        ck_assert(UA_Variant_calcSizeBinary(&connectionConfig.connectionProperties[i].value) == UA_Variant_calcSizeBinary(&connectionConf.connectionProperties[i].value));
+    UA_NetworkAddressUrlDataType networkAddressUrlDataCopy =
+        *((UA_NetworkAddressUrlDataType *)connectionConfig.address.data);
+    ck_assert(UA_calcSizeBinary(&networkAddressUrlDataCopy,
+                                &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]) ==
+              UA_calcSizeBinary(&networkAddressUrlData,
+                                &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]));
+    for(size_t i = 0; i < connectionConfig.connectionProperties.mapSize; i++){
+        ck_assert(UA_String_equal(&connectionConfig.connectionProperties.map[i].key.name,
+                                  &connectionConf.connectionProperties.map[i].key.name) == UA_TRUE);
+        ck_assert(UA_Variant_calcSizeBinary(&connectionConfig.connectionProperties.map[i].value) ==
+                  UA_Variant_calcSizeBinary(&connectionConf.connectionProperties.map[i].value));
     }
     UA_PubSubConnectionConfig_clear(&connectionConfig);
-    } END_TEST
+} END_TEST
 
 int main(void) {
-    TCase *tc_add_pubsub_connections_minimal_config = tcase_create("Create PubSub Mqtt Connections with minimal valid config");
+    TCase *tc_add_pubsub_connections_minimal_config =
+        tcase_create("Create PubSub Mqtt Connections with minimal valid config");
     tcase_add_checked_fixture(tc_add_pubsub_connections_minimal_config, setup, teardown);
-    tcase_add_test(tc_add_pubsub_connections_minimal_config, AddConnectionsWithMinimalValidConfiguration);
-    tcase_add_test(tc_add_pubsub_connections_minimal_config, AddRemoveAddConnectionWithMinimalValidConfiguration);
+    tcase_add_test(tc_add_pubsub_connections_minimal_config,
+                   AddConnectionsWithMinimalValidConfiguration);
+    tcase_add_test(tc_add_pubsub_connections_minimal_config,
+                   AddRemoveAddConnectionWithMinimalValidConfiguration);
 
-    TCase *tc_add_pubsub_connections_invalid_config = tcase_create("Create PubSub Mqtt Connections with invalid configurations");
+    TCase *tc_add_pubsub_connections_invalid_config =
+        tcase_create("Create PubSub Mqtt Connections with invalid configurations");
     tcase_add_checked_fixture(tc_add_pubsub_connections_invalid_config, setup, teardown);
-    tcase_add_test(tc_add_pubsub_connections_invalid_config, AddConnectionWithInvalidAddress);
-    tcase_add_test(tc_add_pubsub_connections_invalid_config, AddConnectionWithUnknownTransportURL);
-    tcase_add_test(tc_add_pubsub_connections_invalid_config, AddConnectionWithNullConfig);
+    tcase_add_test(tc_add_pubsub_connections_invalid_config,
+                   AddConnectionWithInvalidAddress);
+    tcase_add_test(tc_add_pubsub_connections_invalid_config,
+                   AddConnectionWithUnknownTransportURL);
+    tcase_add_test(tc_add_pubsub_connections_invalid_config,
+                   AddConnectionWithNullConfig);
 
-    TCase *tc_add_pubsub_connections_maximal_config = tcase_create("Create PubSub Mqtt Connections with maximal valid config");
+    TCase *tc_add_pubsub_connections_maximal_config =
+        tcase_create("Create PubSub Mqtt Connections with maximal valid config");
     tcase_add_checked_fixture(tc_add_pubsub_connections_maximal_config, setup, teardown);
-    tcase_add_test(tc_add_pubsub_connections_maximal_config, AddSingleConnectionWithMaximalConfiguration);
-    tcase_add_test(tc_add_pubsub_connections_maximal_config, GetMaximalConnectionConfigurationAndCompareValues);
+    tcase_add_test(tc_add_pubsub_connections_maximal_config,
+                   AddSingleConnectionWithMaximalConfiguration);
+    tcase_add_test(tc_add_pubsub_connections_maximal_config,
+                   GetMaximalConnectionConfigurationAndCompareValues);
 
     Suite *s = suite_create("PubSub Mqtt connection creation");
     suite_add_tcase(s, tc_add_pubsub_connections_minimal_config);
     suite_add_tcase(s, tc_add_pubsub_connections_invalid_config);
     suite_add_tcase(s, tc_add_pubsub_connections_maximal_config);
-    //suite_add_tcase(s, tc_decode);
 
     SRunner *sr = srunner_create(s);
     srunner_set_fork_status(sr, CK_NOFORK);

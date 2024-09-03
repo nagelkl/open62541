@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
                      "<opc.tcp://host:port> "
                      "<client-certificate.der> <client-private-key.der> "
                      "[<trustlist1.crl>, ...]");
-        return EXIT_FAILURE;
+        return EXIT_SUCCESS;
     }
 
     const char *endpointUrl = argv[1];
@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
     size_t trustListSize = 0;
     if(argc > MIN_ARGS)
         trustListSize = (size_t)argc-MIN_ARGS;
-    UA_STACKARRAY(UA_ByteString, trustList, trustListSize);
+    UA_STACKARRAY(UA_ByteString, trustList, trustListSize+1);
     for(size_t trustListCount = 0; trustListCount < trustListSize; trustListCount++)
         trustList[trustListCount] = loadFile(argv[trustListCount+4]);
 
@@ -44,9 +44,17 @@ int main(int argc, char* argv[]) {
     UA_Client *client = UA_Client_new();
     UA_ClientConfig *cc = UA_Client_getConfig(client);
     cc->securityMode = UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
-    UA_ClientConfig_setDefaultEncryption(cc, certificate, privateKey,
+    UA_String_clear(&cc->clientDescription.applicationUri);
+    cc->clientDescription.applicationUri = UA_STRING_ALLOC("urn:open62541.server.application");
+    UA_StatusCode retval = UA_ClientConfig_setDefaultEncryption(cc, certificate, privateKey,
                                          trustList, trustListSize,
                                          revocationList, revocationListSize);
+    if(retval != UA_STATUSCODE_GOOD) {
+        UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
+                    "Failed to set encryption." );
+        UA_Client_delete(client);
+        return EXIT_FAILURE;
+    }
 
     UA_ByteString_clear(&certificate);
     UA_ByteString_clear(&privateKey);
@@ -56,7 +64,7 @@ int main(int argc, char* argv[]) {
 
     /* Secure client connect */
     cc->securityMode = UA_MESSAGESECURITYMODE_SIGNANDENCRYPT; /* require encryption */
-    UA_StatusCode retval = UA_Client_connect(client, endpointUrl);
+    retval = UA_Client_connect(client, endpointUrl);
     if(retval != UA_STATUSCODE_GOOD) {
         UA_Client_delete(client);
         return EXIT_FAILURE;
@@ -66,7 +74,7 @@ int main(int argc, char* argv[]) {
     UA_Variant_init(&value);
 
     /* NodeId of the variable holding the current time */
-    const UA_NodeId nodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_SERVERSTATUS_CURRENTTIME);
+    const UA_NodeId nodeId = UA_NS0ID(SERVER_SERVERSTATUS_CURRENTTIME);
     retval = UA_Client_readValueAttribute(client, nodeId, &value);
 
     if(retval == UA_STATUSCODE_GOOD &&

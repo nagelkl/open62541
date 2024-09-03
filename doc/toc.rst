@@ -4,15 +4,14 @@ open62541 Documentation
 .. toctree::
 
    index
+   core_concepts
    building
-   installing
-   tutorials
-   protocol
    types
-   services
-   nodestore
    server
    client
+   pubsub
+   tutorials
    common
    nodeset_compiler
-   internal
+   statuscodes
+   plugin

@@ -6,7 +6,10 @@
 #include <open62541/client_config_default.h>
 #include <open62541/client_highlevel.h>
 #include <check.h>
+#include <stdlib.h>
 #include <testing_clock.h>
+
+#include "test_helpers.h"
 #include "thread_wrapper.h"
 #include "mt_testing.h"
 
@@ -44,8 +47,8 @@ void AddVariableNode(void) {
 
 static void setup(void) {
     tc.running = true;
-    tc.server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(tc.server));
+    tc.server = UA_Server_newForUnitTest();
+    ck_assert(tc.server != NULL);
     AddVariableNode();
     UA_Server_run_startup(tc.server);
     THREAD_CREATE(server_thread, serverloop);
@@ -69,7 +72,7 @@ void server_readValue(void *value) {
     UA_StatusCode retval = UA_Server_readValue(tc.server, rvi.nodeId, &var);
     if (retval == UA_STATUSCODE_GOOD) {
         ck_assert_int_eq(42, *(UA_Int32 *)var.data);
-        UA_Variant_deleteMembers(&var);
+        UA_Variant_clear(&var);
     }
     else {
         ck_assert_int_eq(retval, UA_STATUSCODE_BADNODEIDUNKNOWN);
@@ -107,7 +110,7 @@ void client_readValue(void *value) {
     UA_StatusCode retval = UA_Client_readValueAttribute(tc.clients[tmp.index], nodeId, &val);
     if (retval == UA_STATUSCODE_GOOD) {
         ck_assert_int_eq(42, *(UA_Int32 *)val.data);
-        UA_Variant_deleteMembers(&val);
+        UA_Variant_clear(&val);
     }
     else {
         ck_assert_int_eq(retval, UA_STATUSCODE_BADNODEIDUNKNOWN);
@@ -117,8 +120,6 @@ void client_readValue(void *value) {
 
 static
 void initTest(void) {
-    initThreadContext(NUMBER_OF_READ_WORKERS + NUMBER_OF_WRITE_WORKERS + 1, NUMBER_OF_READ_CLIENTS + NUMBER_OF_WRITE_CLIENTS, NULL);
-
     size_t i = 0;
     for (; i < NUMBER_OF_READ_WORKERS; i++) {
         setThreadContext(&tc.workerContext[i], i, ITERATIONS_PER_WORKER, server_readValue);
@@ -147,7 +148,6 @@ END_TEST
 static Suite* testSuite_immutableNodes(void) {
     Suite *s = suite_create("Multithreading");
     TCase *valueCallback = tcase_create("Read-Write-Delete attribute");
-    initTest();
     tcase_add_checked_fixture(valueCallback, setup, teardown);
     tcase_add_test(valueCallback, readWriteDelete);
     suite_add_tcase(s,valueCallback);
@@ -158,7 +158,13 @@ int main(void) {
     Suite *s = testSuite_immutableNodes();
     SRunner *sr = srunner_create(s);
     srunner_set_fork_status(sr, CK_NOFORK);
+
+    createThreadContext(NUMBER_OF_READ_WORKERS + NUMBER_OF_WRITE_WORKERS + 1,
+                        NUMBER_OF_READ_CLIENTS + NUMBER_OF_WRITE_CLIENTS, NULL);
+    initTest();
     srunner_run_all(sr, CK_NORMAL);
+    deleteThreadContext();
+
     int number_failed = srunner_ntests_failed(sr);
     srunner_free(sr);
     return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;

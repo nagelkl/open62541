@@ -7,6 +7,9 @@
 #include <open62541/client_config_default.h>
 #include <open62541/client_highlevel.h>
 #include <check.h>
+#include <stdlib.h>
+
+#include "test_helpers.h"
 #include "thread_wrapper.h"
 #include "mt_testing.h"
 
@@ -40,8 +43,8 @@ void addVariableNode(void) {
 
 static void setup(void) {
     tc.running = true;
-    tc.server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(tc.server));
+    tc.server = UA_Server_newForUnitTest();
+    ck_assert(tc.server != NULL);
     addVariableNode();
     UA_Server_run_startup(tc.server);
     THREAD_CREATE(server_thread, serverloop);
@@ -53,7 +56,7 @@ static void checkServer(void) {
     UA_StatusCode ret = UA_Server_readValue(tc.server, pumpTypeId, &var);
     ck_assert_int_eq(42, *(UA_Int32 *)var.data);
     ck_assert_int_eq(UA_STATUSCODE_GOOD, ret);
-    UA_Variant_deleteMembers(&var);
+    UA_Variant_clear(&var);
 }
 
 static

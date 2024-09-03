@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 
 ### This Source Code Form is subject to the terms of the Mozilla Public
 ### License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,9 +12,11 @@
 import logging
 import argparse
 import sys
+import xml.etree.ElementTree as etree
 from datatypes import NodeId
 from nodeset import *
 
+# Parse the arguments
 parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('-e', '--existing',
                     metavar="<existingNodeSetXML>",
@@ -32,6 +33,14 @@ parser.add_argument('-x', '--xml',
                     dest="infiles",
                     default=[],
                     help='NodeSet XML files with nodes that shall be generated.')
+
+parser.add_argument('--bsd',
+                    metavar="<nodeSetBSD>",
+                    type=argparse.FileType('rb'),
+                    action='append',
+                    dest="bsdFile",
+                    default=[],
+                    help='Nodeset BSD file which must be specified if self-defined data types are contained in the XML and the BSD blob is not integrated in the XML.')
 
 parser.add_argument('outputFile',
                     metavar='<outputFile>',
@@ -88,25 +97,29 @@ logger.setLevel(logging.INFO)
 verbosity = 0
 if args.verbose:
     verbosity = int(args.verbose)
-if (verbosity == 1):
+if verbosity == 1:
     logging.basicConfig(level=logging.ERROR)
-elif (verbosity == 2):
+elif verbosity == 2:
     logging.basicConfig(level=logging.WARNING)
-elif (verbosity == 3):
+elif verbosity == 3:
     logging.basicConfig(level=logging.INFO)
-elif (verbosity >= 4):
+elif verbosity >= 4:
     logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.CRITICAL)
 
-# Set up logging
-logger = logging.getLogger(__name__)
 # Create a new nodeset. The nodeset name is not significant.
 # Parse the XML files
 ns = NodeSet()
 nsCount = 0
 loadedFiles = list()
 
+# Remove duplicate entries in typesArray, which occur when a nodeset has more than one depend.
+tmp_list = []
+for e in args.typesArray:
+    if e not in tmp_list:
+        tmp_list.append(e)
+args.typesArray = tmp_list
 
 def getTypesArray(nsIdx):
     if nsIdx < len(args.typesArray):
@@ -114,31 +127,50 @@ def getTypesArray(nsIdx):
     else:
         return "UA_TYPES"
 
+def hasCustomDataType(xmlfile):
+    tree = etree.parse(xmlfile)
+    root = tree.getroot()
+
+    for elem in root.iter():
+        if elem.tag.endswith('UADataType'):
+            xmlfile.seek(0)
+            return True
+    # No custom data types found
+    xmlfile.seek(0)
+    return False
+
 for xmlfile in args.existing:
     if xmlfile.name in loadedFiles:
-        logger.info("Skipping Nodeset since it is already loaded: {} ".format(xmlfile.name))
+        logger.info(f"Skipping Nodeset since it is already loaded: {xmlfile.name} ")
         continue
     loadedFiles.append(xmlfile.name)
     logger.info("Preprocessing (existing) " + str(xmlfile.name))
-    ns.addNodeSet(xmlfile, True, typesArray=getTypesArray(nsCount))
-    nsCount +=1
+    if hasCustomDataType(xmlfile):
+        ns.addNodeSet(xmlfile, True, typesArray=getTypesArray(nsCount))
+        nsCount += 1
+        continue
+    ns.addNodeSet(xmlfile, True, typesArray="UA_TYPES")
+
 for xmlfile in args.infiles:
     if xmlfile.name in loadedFiles:
-        logger.info("Skipping Nodeset since it is already loaded: {} ".format(xmlfile.name))
+        logger.info(f"Skipping Nodeset since it is already loaded: {xmlfile.name} ")
         continue
     loadedFiles.append(xmlfile.name)
     logger.info("Preprocessing " + str(xmlfile.name))
-    ns.addNodeSet(xmlfile, typesArray=getTypesArray(nsCount))
-    nsCount +=1
+    if hasCustomDataType(xmlfile):
+        ns.addNodeSet(xmlfile, typesArray=getTypesArray(nsCount))
+        nsCount += 1
+        continue
+    ns.addNodeSet(xmlfile, typesArray="UA_TYPES")
 
 # # We need to notify the open62541 server of the namespaces used to be able to use i.e. ns=3
 # namespaceArrayNames = preProc.getUsedNamespaceArrayNames()
 # for key in namespaceArrayNames:
 #   ns.addNamespace(key, namespaceArrayNames[key])
 
-# Set the nodes from the ignore list to hidden. This removes them from dependency calculation
-# and from printing their generated code.
-# These nodes should be already pre-created on the server to avoid any errors during
+# Set the nodes from the ignore list to hidden. This removes them from
+# dependency calculation and from printing their generated code. These nodes
+# should be already pre-created on the server to avoid any errors during
 # creation.
 for ignoreFile in args.ignoreFiles:
     for line in ignoreFile.readlines():
@@ -146,22 +178,26 @@ for ignoreFile in args.ignoreFiles:
         id = line.replace("\n", "")
         ns.hide_node(NodeId(id))
         #if not ns.hide_node(NodeId(id)):
-        #    logger.info("Can't ignore node, namespace does currently not contain a node with id " + str(id))
+        #    logger.info("Cannot ignore node, namespace does currently not contain a node with id " + str(id))
     ignoreFile.close()
 
 # Remove nodes that are not printable or contain parsing errors, such as
 # unresolvable or no references or invalid NodeIDs
 ns.sanitize()
 
+# Generate the BSD file from the XML.
+ns.generateParser(args.existing, args.infiles, args.bsdFile)
+
 # Allocate/Parse the data values. In order to do this, we must have run
 # buidEncodingRules.
 ns.allocateVariables()
 
+# Create inverse references
 ns.addInverseReferences()
 
-
-# Remove blacklisted nodes from the nodeset.
-# We need to have the inverse references here to ensure the reference is deleted from the referencing node too
+# Remove blacklisted nodes from the nodeset. We need to have the inverse
+# references here to ensure the reference is deleted from the referencing node
+# too
 if args.blacklistFiles:
     for blacklist in args.blacklistFiles:
         for line in blacklist.readlines():
@@ -173,15 +209,16 @@ if args.blacklistFiles:
                 continue
             n = ns.getNodeByIDString(id)
             if n is None:
-                logger.debug("Can't blacklist node, namespace does currently not contain a node with id " + str(id))
+                logger.debug("Cannot blacklist node, namespace does currently not contain a node with id " + str(id))
             else:
                 ns.remove_node(n)
         blacklist.close()
     ns.sanitize()
 
+# Figure out from the references which is the parent for each node
 ns.setNodeParent()
 
-logger.info("Generating Code for Backend: {}".format(args.backend))
+logger.info(f"Generating Code for Backend: {args.backend}")
 
 if args.backend == "open62541":
     # Create the C code with the open62541 backend of the compiler
@@ -191,8 +228,7 @@ elif args.backend == "graphviz":
     from backend_graphviz import generateGraphvizCode
     generateGraphvizCode(ns, filename=args.outputFile)
 else:
-    logger.error("Unsupported backend: {}".format(args.backend))
+    logger.error(f"Unsupported backend: {args.backend}")
     exit(1)
-
 
 logger.info("NodeSet generation code successfully printed")

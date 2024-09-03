@@ -21,16 +21,12 @@
  * ^^^^^^^^^^^^^^^^^^^^^^^^^^^
  * As a starting point, assume that a variable for a value of type
  * :ref:`datetime` has been created in the server with the identifier
- * "ns=1,s=current-time". Assuming that our applications gets triggered when a
+ * "ns=1,s=current-time". Assuming that our application gets triggered when a
  * new value arrives from the underlying process, we can just write into the
  * variable. */
 
 #include <open62541/plugin/log_stdout.h>
 #include <open62541/server.h>
-#include <open62541/server_config_default.h>
-
-#include <signal.h>
-#include <stdlib.h>
 
 static void
 updateCurrentTime(UA_Server *server) {
@@ -51,9 +47,9 @@ addCurrentTimeVariable(UA_Server *server) {
 
     UA_NodeId currentNodeId = UA_NODEID_STRING(1, "current-time-value-callback");
     UA_QualifiedName currentName = UA_QUALIFIEDNAME(1, "current-time-value-callback");
-    UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
-    UA_NodeId parentReferenceNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
-    UA_NodeId variableTypeNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE);
+    UA_NodeId parentNodeId = UA_NS0ID(OBJECTSFOLDER);
+    UA_NodeId parentReferenceNodeId = UA_NS0ID(ORGANIZES);
+    UA_NodeId variableTypeNodeId = UA_NS0ID(BASEDATAVARIABLETYPE);
     UA_Server_addVariableNode(server, currentNodeId, parentNodeId,
                               parentReferenceNodeId, currentName,
                               variableTypeNodeId, attr, NULL, NULL);
@@ -104,8 +100,8 @@ addValueCallbackToCurrentTimeVariable(UA_Server *server) {
  * With value callbacks, the value is still stored in the variable node.
  * So-called data sources go one step further. The server redirects every read
  * and write request to a callback function. Upon reading, the callback provides
- * copy of the current value. Internally, the data source needs to implement its
- * own memory management. */
+ * a copy of the current value. Internally, the data source needs to implement
+ * its own memory management. */
 
 static UA_StatusCode
 readCurrentTime(UA_Server *server,
@@ -138,9 +134,9 @@ addCurrentTimeDataSourceVariable(UA_Server *server) {
 
     UA_NodeId currentNodeId = UA_NODEID_STRING(1, "current-time-datasource");
     UA_QualifiedName currentName = UA_QUALIFIEDNAME(1, "current-time-datasource");
-    UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
-    UA_NodeId parentReferenceNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
-    UA_NodeId variableTypeNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE);
+    UA_NodeId parentNodeId = UA_NS0ID(OBJECTSFOLDER);
+    UA_NodeId parentReferenceNodeId = UA_NS0ID(ORGANIZES);
+    UA_NodeId variableTypeNodeId = UA_NS0ID(BASEDATAVARIABLETYPE);
 
     UA_DataSource timeDataSource;
     timeDataSource.read = readCurrentTime;
@@ -151,27 +147,30 @@ addCurrentTimeDataSourceVariable(UA_Server *server) {
                                         timeDataSource, NULL, NULL);
 }
 
-/** It follows the main server code, making use of the above definitions. */
+static UA_DataValue *externalValue;
 
-static volatile UA_Boolean running = true;
-static void stopHandler(int sign) {
-    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "received ctrl-c");
-    running = false;
+static void
+addCurrentTimeExternalDataSource(UA_Server *server) {
+    UA_NodeId currentNodeId = UA_NODEID_STRING(1, "current-time-external-source");
+
+    UA_ValueBackend valueBackend;
+    valueBackend.backendType = UA_VALUEBACKENDTYPE_EXTERNAL;
+    valueBackend.backend.external.value = &externalValue;
+
+    UA_Server_setVariableNode_valueBackend(server, currentNodeId, valueBackend);
 }
 
-int main(void) {
-    signal(SIGINT, stopHandler);
-    signal(SIGTERM, stopHandler);
+/** It follows the main server code, making use of the above definitions. */
 
+int main(void) {
     UA_Server *server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(server));
 
     addCurrentTimeVariable(server);
     addValueCallbackToCurrentTimeVariable(server);
     addCurrentTimeDataSourceVariable(server);
+    addCurrentTimeExternalDataSource(server);
 
-    UA_StatusCode retval = UA_Server_run(server, &running);
-
+    UA_Server_runUntilInterrupt(server);
     UA_Server_delete(server);
-    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
+    return 0;
 }

@@ -6,6 +6,9 @@
 #include <open62541/client_config_default.h>
 #include <open62541/client_highlevel.h>
 #include <check.h>
+#include <stdlib.h>
+
+#include "test_helpers.h"
 #include "thread_wrapper.h"
 #include "mt_testing.h"
 
@@ -37,8 +40,8 @@ void addVariableNode(void) {
 
 static void setup(void) {
     tc.running = true;
-    tc.server = UA_Server_new();
-    UA_ServerConfig_setDefault(UA_Server_getConfig(tc.server));
+    tc.server = UA_Server_newForUnitTest();
+    ck_assert(tc.server != NULL);
     addVariableNode();
     UA_Server_run_startup(tc.server);
     THREAD_CREATE(server_thread, serverloop);
@@ -55,10 +58,10 @@ void server_readValueAttribute(void * value) {
     UA_DataValue resp = UA_Server_read(tc.server, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
     ck_assert_int_eq(UA_STATUSCODE_GOOD, resp.status);
     ck_assert_int_eq(true, resp.hasValue);
-    ck_assert_int_eq(0, resp.value.arrayLength);
+    ck_assert_uint_eq(0, resp.value.arrayLength);
     ck_assert(&UA_TYPES[UA_TYPES_INT32] == resp.value.type);
     ck_assert_int_eq(42, *(UA_Int32* )resp.value.data);
-    UA_DataValue_deleteMembers(&resp);
+    UA_DataValue_clear(&resp);
 
     // read 2
     UA_Variant var;
@@ -67,7 +70,7 @@ void server_readValueAttribute(void * value) {
     ck_assert_int_eq(UA_STATUSCODE_GOOD, ret);
     ck_assert_int_eq(42, *(UA_Int32 *)var.data);
 
-    UA_Variant_deleteMembers(&var);
+    UA_Variant_clear(&var);
 }
 
 
@@ -79,13 +82,11 @@ void client_readValueAttribute(void * value) {
     UA_StatusCode retval = UA_Client_readValueAttribute(tc.clients[tmp.index], nodeId, &val);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
     ck_assert_int_eq(42, *(UA_Int32 *)val.data);
-    UA_Variant_deleteMembers(&val);
+    UA_Variant_clear(&val);
 }
 
 static
 void initTest(void) {
-    initThreadContext(NUMBER_OF_WORKERS, NUMBER_OF_CLIENTS, NULL);
-
     for (size_t i = 0; i < tc.numberOfWorkers; i++) {
         setThreadContext(&tc.workerContext[i], i, ITERATIONS_PER_WORKER, server_readValueAttribute);
     }
@@ -103,7 +104,6 @@ END_TEST
 static Suite* testSuite_immutableNodes(void) {
     Suite *s = suite_create("Multithreading");
     TCase *valueCallback = tcase_create("Read Write attribute");
-    initTest();
     tcase_add_checked_fixture(valueCallback, setup, teardown);
     tcase_add_test(valueCallback, readValueAttribute);
     suite_add_tcase(s,valueCallback);
@@ -114,7 +114,12 @@ int main(void) {
     Suite *s = testSuite_immutableNodes();
     SRunner *sr = srunner_create(s);
     srunner_set_fork_status(sr, CK_NOFORK);
+
+    createThreadContext(NUMBER_OF_WORKERS, NUMBER_OF_CLIENTS, NULL);
+    initTest();
     srunner_run_all(sr, CK_NORMAL);
+    deleteThreadContext();
+
     int number_failed = srunner_ntests_failed(sr);
     srunner_free(sr);
     return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;

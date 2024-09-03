@@ -1,5 +1,8 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
- * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
+ * See http://creativecommons.org/publicdomain/zero/1.0/ for more information.
+ *
+ * Copyright (c) 2022 Linutronix GmbH (Author: Muddasir Shakil)
+ */
 
 /*
  * A simple server instance which registers with the discovery server.
@@ -16,6 +19,8 @@
 
 #include <signal.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
 
 const UA_ByteString UA_SECURITY_POLICY_BASIC128_URI =
     {56, (UA_Byte *)"http://opcfoundation.org/UA/SecurityPolicy#Basic128Rsa15"};
@@ -65,8 +70,8 @@ serverOnNetworkCallback(const UA_ServerOnNetwork *serverOnNetwork, UA_Boolean is
  * @param discoveryServerUrl The discovery url from the remote server
  * @return The endpoint description (which needs to be freed) or NULL
  */
-static
-UA_EndpointDescription *getRegisterEndpointFromServer(const char *discoveryServerUrl) {
+static UA_EndpointDescription *
+getRegisterEndpointFromServer(const char *discoveryServerUrl) {
     UA_Client *client = UA_Client_new();
     UA_ClientConfig_setDefault(UA_Client_getConfig(client));
     UA_EndpointDescription *endpointArray = NULL;
@@ -156,31 +161,23 @@ static UA_ByteString loadFile(const char *const path) {
  * @param argv from the main method
  * @return NULL or the initialized non-connected client
  */
-static
-UA_Client *getRegisterClient(UA_EndpointDescription *endpointRegister, int argc, char **argv) {
+static UA_StatusCode
+getRegisterClient(UA_ClientConfig *cc, UA_EndpointDescription *endpointRegister, int argc, char **argv) {
+    UA_ClientConfig_setDefault(cc);
     if(endpointRegister->securityMode == UA_MESSAGESECURITYMODE_NONE) {
         UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Using LDS endpoint with security None");
-        UA_Client *client = UA_Client_new();
-        UA_ClientConfig_setDefault(UA_Client_getConfig(client));
-        return client;
+        return UA_STATUSCODE_GOOD;
     }
+
 #ifdef UA_ENABLE_ENCRYPTION
     if(endpointRegister->securityMode == UA_MESSAGESECURITYMODE_SIGN) {
         UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                     "LDS endpoint which only supports Sign is currently not supported");
-        return NULL;
+        return UA_STATUSCODE_BADINTERNALERROR;
     }
 
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                 "Using LDS endpoint with security SignAndEncrypt");
-
-    UA_ByteString certificate = UA_BYTESTRING_NULL;
-    UA_ByteString privateKey = UA_BYTESTRING_NULL;
-    UA_ByteString *trustList = NULL;
-    size_t trustListSize = 0;
-    UA_ByteString *revocationList = NULL;
-    size_t revocationListSize = 0;
-
 
     if(argc < 3) {
         UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
@@ -188,29 +185,24 @@ UA_Client *getRegisterClient(UA_EndpointDescription *endpointRegister, int argc,
                          "The required arguments are "
                          "<client-certificate.der> <client-private-key.der> "
                          "[<trustlist1.crl>, ...]");
-        return NULL;
+        return UA_STATUSCODE_BADINTERNALERROR;
     }
-    certificate = loadFile(argv[1]);
-    privateKey = loadFile(argv[2]);
 
-    /* Load the trustList. Load revocationList is not supported now */
-    if(argc > 3) {
+    /* Load certificate and key */
+    UA_ByteString certificate = loadFile(argv[1]);
+    UA_ByteString privateKey = loadFile(argv[2]);
+
+    /* Load the trustList */
+    UA_ByteString *revocationList = NULL;
+    size_t revocationListSize = 0;
+    size_t trustListSize = 0;
+    if(argc > 3)
         trustListSize = (size_t) argc - 3;
-        UA_StatusCode retval = UA_ByteString_allocBuffer(trustList, trustListSize);
-        if(retval != UA_STATUSCODE_GOOD) {
-            UA_ByteString_clear(&certificate);
-            UA_ByteString_clear(&privateKey);
-            return NULL;
-        }
-
-        for(size_t trustListCount = 0; trustListCount < trustListSize; trustListCount++) {
-            trustList[trustListCount] = loadFile(argv[trustListCount + 3]);
-        }
-    }
+    UA_STACKARRAY(UA_ByteString, trustList, trustListSize+1);
+    for(size_t trustListCount = 0; trustListCount < trustListSize; trustListCount++)
+        trustList[trustListCount] = loadFile(argv[trustListCount + 3]);
 
     /* Secure client initialization */
-    UA_Client *clientRegister = UA_Client_new();
-    UA_ClientConfig *cc = UA_Client_getConfig(clientRegister);
     UA_ClientConfig_setDefaultEncryption(cc, certificate, privateKey,
                                          trustList, trustListSize,
                                          revocationList, revocationListSize);
@@ -220,11 +212,9 @@ UA_Client *getRegisterClient(UA_EndpointDescription *endpointRegister, int argc,
     UA_ByteString_clear(&privateKey);
     for(size_t deleteCount = 0; deleteCount < trustListSize; deleteCount++)
         UA_ByteString_clear(&trustList[deleteCount]);
-
-    return clientRegister;
-#else
-    return NULL;
 #endif
+
+    return UA_STATUSCODE_GOOD;
 }
 
 int main(int argc, char **argv) {
@@ -233,8 +223,7 @@ int main(int argc, char **argv) {
 
     UA_Server *server = UA_Server_new();
     UA_ServerConfig *config = UA_Server_getConfig(server);
-    // use port 0 to dynamically assign port
-    UA_ServerConfig_setMinimal(config, 0, NULL);
+    UA_ServerConfig_setMinimal(config, 4841, NULL);
 
     // An LDS server normally has the application type to DISCOVERYSERVER.
     // Since this instance implements LDS and other OPC UA services, we set the type to SERVER.
@@ -247,12 +236,12 @@ int main(int argc, char **argv) {
         UA_String_fromChars("urn:open62541.example.server_multicast");
 
     // Enable the mDNS announce and response functionality
-    config->discovery.mdnsEnable = true;
+    config->mdnsEnabled = true;
 
-    config->discovery.mdns.mdnsServerName = UA_String_fromChars("Sample Multicast Server");
+    config->mdnsConfig.mdnsServerName = UA_String_fromChars("Sample-Multicast-Server");
 
     //setting custom outbound interface
-    config->discovery.mdnsInterfaceIP = UA_String_fromChars("42.42.42.42"); //this line will produce an error and set the interface to 0.0.0.0
+    config->mdnsInterfaceIP = UA_String_fromChars("0.0.0.0");
 
     // See http://www.opcfoundation.org/UA/schemas/1.03/ServerCapabilities.csv
     // For a LDS server, you should only indicate the LDS capability.
@@ -261,11 +250,10 @@ int main(int argc, char **argv) {
     // NOTE: UaExpert does not show LDS-only servers in the list.
     // See also: https://forum.unified-automation.com/topic1987.html
 
-    config->discovery.mdns.serverCapabilitiesSize = 2;
-    UA_String *caps = (UA_String *) UA_Array_new(2, &UA_TYPES[UA_TYPES_STRING]);
+    config->mdnsConfig.serverCapabilitiesSize = 1;
+    UA_String *caps = (UA_String *) UA_Array_new(1, &UA_TYPES[UA_TYPES_STRING]);
     caps[0] = UA_String_fromChars("LDS");
-    caps[1] = UA_String_fromChars("NA");
-    config->discovery.mdns.serverCapabilities = caps;
+    config->mdnsConfig.serverCapabilities = caps;
 
     // Start the server and call iterate to wait for the multicast discovery of the LDS
     UA_StatusCode retval = UA_Server_run_startup(server);
@@ -287,9 +275,10 @@ int main(int argc, char **argv) {
     while (running && discovery_url == NULL)
         UA_Server_run_iterate(server, true);
     if(!running) {
+        UA_Server_run_shutdown(server);
         UA_Server_delete(server);
         UA_free(discovery_url);
-        return EXIT_FAILURE;
+        return EXIT_SUCCESS;
     }
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "LDS-ME server found on %s", discovery_url);
 
@@ -301,51 +290,51 @@ int main(int argc, char **argv) {
     if(endpointRegister == NULL || endpointRegister->securityMode == UA_MESSAGESECURITYMODE_INVALID) {
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not find any suitable endpoints on discovery server");
+        UA_Server_run_shutdown(server);
         UA_Server_delete(server);
         return EXIT_FAILURE;
     }
 
-    UA_Client *clientRegister = getRegisterClient(endpointRegister, argc, argv);
-    if(!clientRegister) {
+    UA_ClientConfig cc;
+    memset(&cc, 0, sizeof(UA_ClientConfig));
+    retval = getRegisterClient(&cc, endpointRegister, argc, argv);
+    if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_FATAL(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                      "Could not create the client for remote registering");
+        UA_ClientConfig_clear(&cc);
+        UA_Server_run_shutdown(server);
         UA_Server_delete(server);
+        UA_EndpointDescription_delete(endpointRegister);
         return EXIT_FAILURE;
     }
 
-    /* Connect the client */
-    char *endpointUrl = (char*)UA_malloc(endpointRegister->endpointUrl.length + 1);
-    memcpy(endpointUrl, endpointRegister->endpointUrl.data, endpointRegister->endpointUrl.length);
-    endpointUrl[endpointRegister->endpointUrl.length] = 0;
-    UA_EndpointDescription_delete(endpointRegister);
-    retval = UA_Server_addPeriodicServerRegisterCallback(server, clientRegister, endpointUrl,
-                                                         10 * 60 * 1000, 500, NULL);
+    /* Register the server */
+    retval = UA_Server_registerDiscovery(server, &cc, endpointRegister->endpointUrl, UA_STRING_NULL);
     if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not create periodic job for server register. StatusCode %s",
                      UA_StatusCode_name(retval));
-        UA_free(endpointUrl);
-        UA_Client_disconnect(clientRegister);
-        UA_Client_delete(clientRegister);
+        UA_Server_run_shutdown(server);
         UA_Server_delete(server);
+        UA_EndpointDescription_delete(endpointRegister);
         return EXIT_FAILURE;
     }
 
-    while (running)
+    while(running)
         UA_Server_run_iterate(server, true);
 
     UA_Server_run_shutdown(server);
 
-    // UNregister the server from the discovery server.
-    retval = UA_Server_unregister_discovery(server, clientRegister);
+    /* Deregister the server from the discovery server */
+    memset(&cc, 0, sizeof(UA_ClientConfig));
+    retval = getRegisterClient(&cc, endpointRegister, argc, argv);
+    retval |= UA_Server_deregisterDiscovery(server, &cc, endpointRegister->endpointUrl);
     if(retval != UA_STATUSCODE_GOOD)
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not unregister server from discovery server. "
                      "StatusCode %s", UA_StatusCode_name(retval));
 
-    UA_free(endpointUrl);
-    UA_Client_disconnect(clientRegister);
-    UA_Client_delete(clientRegister);
     UA_Server_delete(server);
+    UA_EndpointDescription_delete(endpointRegister);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

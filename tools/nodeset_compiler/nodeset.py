@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 
 ### This Source Code Form is subject to the terms of the Mozilla Public
 ### License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,8 +8,6 @@
 ###    Copyright 2014-2017 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
 ###    Copyright 2016-2017 (c) Stefan Profanter, fortiss GmbH
 
-from __future__ import print_function
-import sys
 import xml.dom.minidom as dom
 import logging
 import codecs
@@ -19,17 +16,14 @@ from datatypes import NodeId, valueIsInternalType
 from nodes import *
 from opaque_type_mapping import opaque_type_mapping
 
+from type_parser import CSVBSDTypeParser
+import io
+import tempfile
+import base64
+
 __all__ = ['NodeSet', 'getSubTypesOf']
 
 logger = logging.getLogger(__name__)
-
-if sys.version_info[0] >= 3:
-    # strings are already parsed to unicode
-    def unicode(s):
-        return s
-    string_types = str
-else:
-    string_types = basestring 
 
 ####################
 # Helper Functions #
@@ -94,11 +88,11 @@ def buildAliasList(xmlelement):
         if al.nodeType == al.ELEMENT_NODE:
             if al.hasAttribute("Alias"):
                 aliasst = al.getAttribute("Alias")
-                aliasnd = unicode(al.firstChild.data)
+                aliasnd = al.firstChild.data
                 aliases[aliasst] = aliasnd
     return aliases
 
-class NodeSet(object):
+class NodeSet:
     """ This class handles parsing XML description of namespaces, instantiating
         nodes, linking references, graphing the namespace and compiling a binary
         representation.
@@ -113,6 +107,7 @@ class NodeSet(object):
         self.nodes = {}
         self.aliases = {}
         self.namespaces = ["http://opcfoundation.org/UA/"]
+        self.namespaceMapping = {}
 
     def sanitize(self):
         for n in self.nodes.values():
@@ -124,23 +119,22 @@ class NodeSet(object):
             for ref in n.references:
                 if not ref.source == n.id:
                     raise Exception("Reference " + str(ref) + " has an invalid source")
-                if not ref.referenceType in self.nodes:
+                if ref.referenceType not in self.nodes:
                     raise Exception("Reference " + str(ref) + " has an unknown reference type")
-                if not ref.target in self.nodes:
+                if ref.target not in self.nodes:
                     print(self.namespaces)
                     raise Exception("Reference " + str(ref) + " has an unknown target")
 
     def addNamespace(self, nsURL):
-        if not nsURL in self.namespaces:
+        if nsURL not in self.namespaces:
             self.namespaces.append(nsURL)
 
     def createNamespaceMapping(self, orig_namespaces):
         """Creates a dict that maps from the nsindex in the original nodeset to the
            nsindex in the combined nodeset"""
-        m = {}
+        self.namespaceMapping = {}
         for index, name in enumerate(orig_namespaces):
-            m[index] = self.namespaces.index(name)
-        return m
+            self.namespaceMapping[index] = self.namespaces.index(name)
 
     def getNodeByBrowseName(self, idstring):
         return next((n for n in self.nodes.values() if idstring == n.browseName.name), None)
@@ -179,7 +173,7 @@ class NodeSet(object):
         return node
 
     def hide_node(self, nodeId, hidden=True):
-        if not nodeId in self.nodes:
+        if nodeId not in self.nodes:
             return False
         node = self.nodes[nodeId]
         node.hidden = hidden
@@ -205,9 +199,9 @@ class NodeSet(object):
                 if ns not in self.namespaces:
                     return None
                 ns = self.namespaces.index(ns)
-                idStr = "ns={};{}".format(ns, m.group(2))
+                idStr = f"ns={ns};{m.group(2)}"
         nodeId = NodeId(idStr)
-        if not nodeId in self.nodes:
+        if nodeId not in self.nodes:
             return None
         return self.nodes[nodeId]
 
@@ -222,16 +216,16 @@ class NodeSet(object):
             if r.target == node.id:
                 if r.source not in self.nodes:
                     continue
-                self.nodes[r.source].references = set(filter(
-                    lambda rt: filterRef(r, rt),
-                    self.nodes[r.source].references
+                self.nodes[r.source].references = dict(filter(
+                    lambda rt: filterRef(r, rt[0]), # filter only on key of each dict item
+                    self.nodes[r.source].references.items()
                 ))
             elif r.source == node.id:
                 if r.target not in self.nodes:
                     continue
-                self.nodes[r.target].references = set(filter(
-                    lambda rt: filterRef(r, rt),
-                    self.nodes[r.target].references
+                self.nodes[r.target].references = dict(filter(
+                    lambda rt: filterRef(r, rt[0]), # filter only on key of each dict item
+                    self.nodes[r.target].references.items()
                 ))
         del self.nodes[node.id]
 
@@ -240,14 +234,13 @@ class NodeSet(object):
         # Extract NodeSet DOM
 
         fileContent = xmlfile.read()
-        # Remove BOM since the dom parser cannot handle it on python 3 windows
+        # Remove BOM since the dom parser cannot handle it on Python 3 Windows
         if fileContent.startswith( codecs.BOM_UTF8 ):
             fileContent = fileContent.lstrip( codecs.BOM_UTF8 )
-        if (sys.version_info >= (3, 0)):
-            fileContent = fileContent.decode("utf-8")
+        fileContent = fileContent.decode("utf-8")
 
         # Remove the uax namespace from tags. UaModeler adds this namespace to some elements
-        fileContent = re.sub(r"<([/]?)uax:(.+?)([/]?)>", "<\g<1>\g<2>\g<3>>", fileContent)
+        fileContent = re.sub(r"<([/]?)uax:(.+?)([/]?)>", "<\\g<1>\\g<2>\\g<3>>", fileContent)
 
         nodesets = dom.parseString(fileContent).getElementsByTagName("UANodeSet")
         if len(nodesets) == 0 or len(nodesets) > 1:
@@ -274,7 +267,7 @@ class NodeSet(object):
 
         for ns in orig_namespaces:
             self.addNamespace(ns)
-        namespaceMapping = self.createNamespaceMapping(orig_namespaces) # mapping for this file
+        self.createNamespaceMapping(orig_namespaces) # mapping for this file
 
         # Extract the aliases
         for nd in nodeset.childNodes:
@@ -293,7 +286,7 @@ class NodeSet(object):
             if not node:
                 continue
             node.replaceAliases(self.aliases)
-            node.replaceNamespaces(namespaceMapping)
+            node.replaceNamespaces(self.namespaceMapping)
             node.typesArray = typesArray
 
             # Add the node the the global dict
@@ -309,7 +302,7 @@ class NodeSet(object):
         #     rpm is encoded as a double
         for n in newnodes.values():
             if isinstance(n, DataTypeNode):
-                n.buildEncoding(self, namespaceMapping=namespaceMapping)
+                n.buildEncoding(self, namespaceMapping=self.namespaceMapping)
 
     def getBinaryEncodingIdForNode(self, nodeId):
         """
@@ -350,7 +343,7 @@ class NodeSet(object):
         return None
 
     def getDataTypeNode(self, dataType):
-        if isinstance(dataType, string_types):
+        if isinstance(dataType, str):
             if not valueIsInternalType(dataType):
                 logger.error("Not a valid dataType string: " + dataType)
                 return None
@@ -375,9 +368,9 @@ class NodeSet(object):
     def addInverseReferences(self):
         # Ensure that every reference has an inverse reference in the target
         for u in self.nodes.values():
-            for ref in u.references:
+            for ref in u.references.copy():
                 back = Reference(ref.target, ref.referenceType, ref.source, not ref.isForward)
-                self.nodes[ref.target].references.add(back) # ref set does not make a duplicate entry
+                self.nodes[ref.target].references[back] = None # dict key does not make a duplicate entry
 
     def setNodeParent(self):
         parentreftypes = getSubTypesOf(self, self.getNodeByBrowseName("HierarchicalReferences"))
@@ -392,8 +385,87 @@ class NodeSet(object):
             if parentref is not None:
                 node.parent = self.nodes[parentref.target]
                 if not node.parent:
-                    raise RuntimeError("Node {}: Did not find parent node: ".format(str(node.id)))
+                    raise RuntimeError(f"Node {str(node.id)}: Did not find parent node: ")
                 node.parentReference = self.nodes[parentref.referenceType]
             # Some nodes in the full nodeset do not have a parent. So accept this and do not show an error.
             #else:
             #    raise RuntimeError("Node {}: HierarchicalReference (or subtype of it) to parent node is missing.".format(str(node.id)))
+
+    def generateParser(self, existing, infiles , bsdFile):
+        self.all_files = []
+        import_bsd = []
+        type_bsd = []
+        for xmlfile in existing:
+            if xmlfile.name == "deps/ua-nodeset/DI/Opc.Ua.Di.NodeSet2.xml":
+                continue
+            nodeset_base = open(xmlfile.name, "rb")
+            #fileContent = xmlfile.read()
+            fileContent = nodeset_base.read()
+            # Remove BOM since the dom parser cannot handle it on python 3 windows
+            if fileContent.startswith( codecs.BOM_UTF8 ):
+                fileContent = fileContent.lstrip( codecs.BOM_UTF8 )
+            fileContent = fileContent.decode("utf-8")
+
+            # Remove the uax namespace from tags. UaModeler adds this namespace to some elements
+            fileContent = re.sub(r"<([/]?)uax:(.+?)([/]?)>", "<\\g<1>\\g<2>\\g<3>>", fileContent)
+
+            nodesets = dom.parseString(fileContent).getElementsByTagName("UANodeSet")
+            if len(nodesets) == 0 or len(nodesets) > 1:
+                raise Exception("contains no or more then 1 nodeset")
+            nodeset = nodesets[0]
+            variableNodes = nodeset.getElementsByTagName("UAVariable")
+            for nd in variableNodes:
+                if (nd.hasAttribute("SymbolicName") and (re.match(r".*_BinarySchema", nd.attributes["SymbolicName"].nodeValue) or nd.attributes["SymbolicName"].nodeValue == "TypeDictionary_BinarySchema")) or (nd.hasAttribute("ParentNodeId") and not nd.hasAttribute("SymbolicName") and re.fullmatch(r"i=93", nd.attributes["ParentNodeId"].nodeValue)):
+                    type_content = nd.getElementsByTagName("Value")[0].getElementsByTagName("ByteString")[0]
+                    f = tempfile.NamedTemporaryFile(delete=False, suffix='.bsd')
+                    f.write(base64.b64decode(type_content.firstChild.nodeValue))
+                    f.flush()
+                    self.all_files.append(f.name)
+                    f.close()
+                    bsd = "UA_TYPES#" + f.name
+                    import_bsd.append(bsd)
+        for xmlfile in infiles:
+            nodeset_base = open(xmlfile.name, "rb")
+            #fileContent = xmlfile.read()
+            fileContent = nodeset_base.read()
+            # Remove BOM since the dom parser cannot handle it on python 3 windows
+            if fileContent.startswith( codecs.BOM_UTF8 ):
+                fileContent = fileContent.lstrip( codecs.BOM_UTF8 )
+            fileContent = fileContent.decode("utf-8")
+
+            # Remove the uax namespace from tags. UaModeler adds this namespace to some elements
+            fileContent = re.sub(r"<([/]?)uax:(.+?)([/]?)>", "<\\g<1>\\g<2>\\g<3>>", fileContent)
+
+            nodesets = dom.parseString(fileContent).getElementsByTagName("UANodeSet")
+            if len(nodesets) == 0 or len(nodesets) > 1:
+                raise Exception("contains no or more then 1 nodeset")
+            nodeset = nodesets[0]
+            variableNodes = nodeset.getElementsByTagName("UAVariable")
+            for nd in variableNodes:
+                if (nd.hasAttribute("SymbolicName") and (re.match(r".*_BinarySchema", nd.attributes["SymbolicName"].nodeValue) or nd.attributes["SymbolicName"].nodeValue == "TypeDictionary_BinarySchema")) or (nd.hasAttribute("ParentNodeId") and not nd.hasAttribute("SymbolicName") and re.fullmatch(r"i=93", nd.attributes["ParentNodeId"].nodeValue)):
+                    type_content = nd.getElementsByTagName("Value")[0].getElementsByTagName("ByteString")[0]
+                    f = tempfile.NamedTemporaryFile(suffix='.bsd')
+                    f.write(base64.b64decode(type_content.firstChild.nodeValue))
+                    f.flush()
+                    f.seek(0)
+                    bf = io.BufferedReader(f)
+                    self.all_files.append(f.name)
+                    tmp = io.TextIOWrapper(bf, 'UTF-8', newline='\n')
+                    tmp.mode = 'r'
+                    type_bsd.append(tmp)
+
+        opaque_map = []
+        selected_types = []
+        type_csv = []
+        type_xml = []
+        no_builtin = True
+        outname = "outname"
+
+        for bsd in bsdFile:
+            type_bsd.append(bsd)
+
+        self.parser = CSVBSDTypeParser(opaque_map, selected_types, no_builtin, outname, import_bsd,
+                                    type_bsd, type_csv, type_xml, self.namespaces)
+        self.parser.create_types()
+
+        nodeset_base.close()

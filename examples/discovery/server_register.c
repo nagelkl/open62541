@@ -1,5 +1,8 @@
 /* This work is licensed under a Creative Commons CCZero 1.0 Universal License.
- * See http://creativecommons.org/publicdomain/zero/1.0/ for more information. */
+ * See http://creativecommons.org/publicdomain/zero/1.0/ for more information.
+ *
+ * Copyright (c) 2022 Linutronix GmbH (Author: Muddasir Shakil)
+ */
 /*
  * A simple server instance which registers with the discovery server (see server_lds.c).
  * Before shutdown it has to unregister itself.
@@ -66,14 +69,13 @@ int main(int argc, char **argv) {
 
     UA_Server *server = UA_Server_new();
     UA_ServerConfig *config = UA_Server_getConfig(server);
-    // use port 0 to dynamically assign port
-    UA_ServerConfig_setMinimal(config, 0, NULL);
+    UA_ServerConfig_setMinimal(config, 4841, NULL);
 
     UA_String_clear(&config->applicationDescription.applicationUri);
     config->applicationDescription.applicationUri =
         UA_String_fromChars("urn:open62541.example.server_register");
-    config->discovery.mdns.mdnsServerName = UA_String_fromChars("Sample Server");
-    // See http://www.opcfoundation.org/UA/schemas/1.03/ServerCapabilities.csv
+    config->mdnsConfig.mdnsServerName = UA_String_fromChars("Sample-Server");
+    // See http://www.opcfoundation.org/UA/schemas/1.04/ServerCapabilities.csv
     //config.serverCapabilitiesSize = 1;
     //UA_String caps = UA_String_fromChars("LDS");
     //config.serverCapabilities = &caps;
@@ -90,53 +92,43 @@ int main(int argc, char **argv) {
     attr.displayName = UA_LOCALIZEDTEXT("en-US", "the answer");
 
     UA_Server_addDataSourceVariableNode(server, myIntegerNodeId,
-                                        UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
-                                        UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
+                                        UA_NS0ID(OBJECTSFOLDER), UA_NS0ID(ORGANIZES),
                                         myIntegerName, UA_NODEID_NULL, attr, dateDataSource,
                                         &myInteger, NULL);
 
-    UA_Client *clientRegister = UA_Client_new();
-    UA_ClientConfig_setDefault(UA_Client_getConfig(clientRegister));
+    UA_Server_run_startup(server);
 
-    // periodic server register after 10 Minutes, delay first register for 500ms
+    // register server
+    UA_ClientConfig cc;
+    memset(&cc, 0, sizeof(UA_ClientConfig));
+    UA_ClientConfig_setDefault(&cc);
+
     UA_StatusCode retval =
-        UA_Server_addPeriodicServerRegisterCallback(server, clientRegister, DISCOVERY_SERVER_ENDPOINT,
-                                                    10 * 60 * 1000, 500, NULL);
-    // UA_StatusCode retval = UA_Server_addPeriodicServerRegisterJob(server,
-    // "opc.tcp://localhost:4840", 10*60*1000, 500, NULL);
+        UA_Server_registerDiscovery(server, &cc,
+                                    UA_STRING(DISCOVERY_SERVER_ENDPOINT), UA_STRING_NULL);
     if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not create periodic job for server register. StatusCode %s",
                      UA_StatusCode_name(retval));
-        UA_Client_disconnect(clientRegister);
-        UA_Client_delete(clientRegister);
-        UA_Server_delete(server);
         UA_Server_delete(server);
         return EXIT_FAILURE;
     }
 
-    retval = UA_Server_run(server, &running);
-
-    if(retval != UA_STATUSCODE_GOOD) {
-        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
-                     "Could not start the server. StatusCode %s",
-                     UA_StatusCode_name(retval));
-        UA_Client_disconnect(clientRegister);
-        UA_Client_delete(clientRegister);
-        UA_Server_delete(server);
-        return EXIT_FAILURE;
-    }
+    while(running)
+        UA_Server_run_iterate(server, true);
 
     // Unregister the server from the discovery server.
-    retval = UA_Server_unregister_discovery(server, clientRegister);
+    memset(&cc, 0, sizeof(UA_ClientConfig));
+    UA_ClientConfig_setDefault(&cc);
+    retval = UA_Server_deregisterDiscovery(server, &cc,
+                                           UA_STRING(DISCOVERY_SERVER_ENDPOINT));
     //retval = UA_Server_unregister_discovery(server, "opc.tcp://localhost:4840" );
     if(retval != UA_STATUSCODE_GOOD)
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                      "Could not unregister server from discovery server. StatusCode %s",
                      UA_StatusCode_name(retval));
 
-    UA_Client_disconnect(clientRegister);
-    UA_Client_delete(clientRegister);
+    UA_Server_run_shutdown(server);
     UA_Server_delete(server);
-    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;;
+    return EXIT_SUCCESS;
 }

@@ -1,10 +1,11 @@
-/* This Source Code Form is subject to the terms of the Mozilla Public 
- * License, v. 2.0. If a copy of the MPL was not distributed with this 
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "ua_timer.h"
-#include "check.h"
+#include "../arch/eventloop_common/timer.h"
 
+#include <check.h>
+#include <stdlib.h>
 #include <time.h>
 #include <stdio.h>
 
@@ -17,19 +18,13 @@ timerCallback(void *application, void *data) {
     count++;
 }
 
-static void
-executionCallback(void *executionApplication, UA_ApplicationCallback cb,
-                  void *callbackApplication, void *data) {
-    cb(callbackApplication, data);
-}
-
 /* Create empty events with different callback intervals */
 static void
 createEvents(UA_Timer *t, UA_UInt32 events) {
     for(size_t i = 0; i < events; i++) {
         UA_Double interval = (UA_Double)i+1;
         UA_StatusCode retval =
-            UA_Timer_addRepeatedCallback(t, timerCallback, NULL, NULL, interval, NULL);
+            UA_Timer_addRepeatedCallback(t, timerCallback, NULL, NULL, interval, 0, NULL, UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, NULL);
         ck_assert_int_eq(retval, UA_STATUSCODE_GOOD);
     }
 }
@@ -42,7 +37,7 @@ START_TEST(benchmarkTimer) {
     clock_t begin = clock();
     UA_DateTime now = 0;
     for(size_t i = 0; i < 1000; i++) {
-        UA_DateTime next = UA_Timer_process(&timer, now, executionCallback, NULL);
+        UA_DateTime next = UA_Timer_process(&timer, now);
         /* At least 100 msec distance between _process */
         now = next + (UA_DATETIME_MSEC * 100);
         if(next > now)
@@ -54,7 +49,7 @@ START_TEST(benchmarkTimer) {
     printf("duration was %f s\n", time_spent);
     printf("%lu callbacks\n", (unsigned long)count);
 
-    UA_Timer_deleteMembers(&timer);
+    UA_Timer_clear(&timer);
 } END_TEST
 
 int main(void) {

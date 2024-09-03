@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -31,6 +31,12 @@ parser.add_argument('-k', '--keysize',
                     type=int,
                     dest="keysize")
 
+parser.add_argument('-c', '--certificatename',
+                     metavar="<CertificateName>",
+                     type=str,
+                     default="",
+                     dest="certificatename")
+
 args = parser.parse_args()
 
 if not os.path.exists(args.outdir):
@@ -45,6 +51,13 @@ if args.uri == "":
     args.uri = "urn:open62541.server.application"
     print("No ApplicationUri given for the certificate. Setting to %s" % args.uri)
 os.environ['URI1'] = args.uri
+
+if args.certificatename == "":
+    certificatename = "server"
+    print("No Certificate name provided. Setting to %s" % certificatename)
+
+if args.certificatename:
+     certificatename = args.certificatename
 
 certsdir = os.path.dirname(os.path.abspath(__file__))
 
@@ -96,11 +109,10 @@ os.system("""openssl req \
      -x509 -sha256  \
      -newkey rsa:{} \
      -keyout localhost.key -days 365 \
-     -subj "/C=DE/O=open62541/CN=open62541Server@localhost"\
+     -subj "/C=DE/L=Here/O=open62541/CN=open62541Server@localhost"\
      -out localhost.crt""".format(openssl_conf, keysize))
-
-os.system("openssl x509 -in localhost.crt -outform der -out server_cert.der")
-os.system("openssl rsa -inform PEM -in localhost.key -outform DER -out server_key.der")
+os.system("openssl x509 -in localhost.crt -outform der -out %s_cert.der" % (certificatename))
+os.system("openssl rsa -inform PEM -in localhost.key -outform DER -out %s_key.der"% (certificatename))
 
 os.remove("localhost.key")
 os.remove("localhost.crt")

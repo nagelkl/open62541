@@ -18,19 +18,18 @@
 #include "client/ua_client_internal.h"
 
 #include <check.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <stdio.h>
 
+#include "test_helpers.h"
 #include "testing_clock.h"
 #include "testing_networklayers.h"
 #include "thread_wrapper.h"
-#ifdef UA_ENABLE_HISTORIZING
 #include "historical_read_test_data.h"
-#endif
-#include <stddef.h>
 
 static UA_Server *server;
-#ifdef UA_ENABLE_HISTORIZING
 static UA_HistoryDataGathering *gathering;
-#endif
 static UA_Boolean running;
 static THREAD_HANDLE server_thread;
 
@@ -38,7 +37,6 @@ static UA_Client *client;
 static UA_NodeId parentNodeId;
 static UA_NodeId parentReferenceNodeId;
 static UA_NodeId outNodeId;
-#ifdef UA_ENABLE_HISTORIZING
 static UA_HistoryDataBackend serverBackend;
 
 // to receive data after we inserted data, we need in datavalue more space
@@ -50,7 +48,6 @@ struct ReceiveTupel {
 static const size_t receivedDataSize = (sizeof(testData) / sizeof(testData[0])) + 10;
 static struct ReceiveTupel receivedTestData[(sizeof(testData) / sizeof(testData[0])) + 10];
 static size_t receivedTestDataPos;
-#endif
 
 THREAD_CALLBACK(serverloop) {
     while(running)
@@ -58,7 +55,6 @@ THREAD_CALLBACK(serverloop) {
     return 0;
 }
 
-#ifdef UA_ENABLE_HISTORIZING
 static UA_Boolean
 fillHistoricalDataBackend(UA_HistoryDataBackend backend);
 static void resetReceiveBuffer(void) {
@@ -79,18 +75,17 @@ static void fillInt64DataValue(UA_DateTime timestamp, UA_Int64 value,
     dataValue->hasStatus = true;
     dataValue->status = UA_STATUSCODE_GOOD;
 }
-#endif
 
 static void setup(void) {
     running = true;
-    server = UA_Server_new();
-    UA_ServerConfig *config = UA_Server_getConfig(server);
-    UA_ServerConfig_setDefault(config);
+    server = UA_Server_newForUnitTest();
+    ck_assert(server != NULL);
 
 #ifdef UA_ENABLE_HISTORIZING
     resetReceiveBuffer();
     gathering = (UA_HistoryDataGathering*)UA_calloc(1, sizeof(UA_HistoryDataGathering));
     *gathering = UA_HistoryDataGathering_Default(1);
+    UA_ServerConfig *config = UA_Server_getConfig(server);
     config->historyDatabase = UA_HistoryDatabase_default(*gathering);
 #endif
 
@@ -124,7 +119,6 @@ static void setup(void) {
                                                 &outNodeId)
                       , UA_STATUSCODE_GOOD);
 
-#ifdef UA_ENABLE_HISTORIZING
     UA_HistorizingNodeIdSettings setting;
     serverBackend = UA_HistoryDataBackend_Memory(1, 100);
     setting.historizingBackend = serverBackend;
@@ -132,65 +126,51 @@ static void setup(void) {
     setting.historizingUpdateStrategy = UA_HISTORIZINGUPDATESTRATEGY_USER;
     retval = gathering->registerNodeId(server, gathering->context, &outNodeId, setting);
     ck_assert_str_eq(UA_StatusCode_name(retval), UA_StatusCode_name(UA_STATUSCODE_GOOD));
-
     ck_assert(fillHistoricalDataBackend(setting.historizingBackend));
-#endif
 
-    client = UA_Client_new();
-    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+    client = UA_Client_newForUnitTest();
     retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
     ck_assert_str_eq(UA_StatusCode_name(retval), UA_StatusCode_name(UA_STATUSCODE_GOOD));
-
-    UA_Client_recv = client->connection.recv;
-    client->connection.recv = UA_Client_recvTesting;
 }
 
 static void
-teardown(void)
-{
+teardown(void) {
     /* cleanup */
-#ifdef UA_ENABLE_HISTORIZING
-    UA_HistoryDataBackend_Memory_deleteMembers(&serverBackend);
-#endif
+    UA_HistoryDataBackend_Memory_clear(&serverBackend);
     UA_Client_disconnect(client);
     UA_Client_delete(client);
-    UA_NodeId_deleteMembers(&parentNodeId);
-    UA_NodeId_deleteMembers(&parentReferenceNodeId);
-    UA_NodeId_deleteMembers(&outNodeId);
+    UA_NodeId_clear(&parentNodeId);
+    UA_NodeId_clear(&parentReferenceNodeId);
+    UA_NodeId_clear(&outNodeId);
     running = false;
     THREAD_JOIN(server_thread);
     UA_Server_run_shutdown(server);
     UA_Server_delete(server);
-#ifdef UA_ENABLE_HISTORIZING
     UA_free(gathering);
-#endif
 }
 
-#ifdef UA_ENABLE_HISTORIZING
-
-#include <stdio.h>
-#include "ua_session.h"
-
 static UA_Boolean
-fillHistoricalDataBackend(UA_HistoryDataBackend backend)
-{
+fillHistoricalDataBackend(UA_HistoryDataBackend backend) {
     fprintf(stderr, "Adding to historical data backend: ");
     for (size_t i = 0; i < testDataSize; ++i) {
         fprintf(stderr, "%lld, ", (long long)testData[i]);
         UA_DataValue value;
         fillInt64DataValue(testData[i], testData[i], &value);
-        if (backend.serverSetHistoryData(server, backend.context, NULL, NULL, &outNodeId, UA_FALSE, &value) != UA_STATUSCODE_GOOD) {
+        if (backend.serverSetHistoryData(server, backend.context, NULL, NULL,
+                                         &outNodeId, UA_FALSE, &value) != UA_STATUSCODE_GOOD) {
             fprintf(stderr, "\n");
-            UA_DataValue_deleteMembers(&value);
+            UA_DataValue_clear(&value);
             return false;
         }
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     fprintf(stderr, "\n");
     return true;
 }
 
-static UA_Boolean checkTestData(UA_Boolean inverse, UA_DateTime *dataA, struct ReceiveTupel *dataB, size_t dataSize) {
+static UA_Boolean
+checkTestData(UA_Boolean inverse, UA_DateTime *dataA,
+              struct ReceiveTupel *dataB, size_t dataSize) {
     for (size_t i = 0; i < dataSize; ++i) {
         if (!inverse && dataA[i] != dataB[i].timestamp)
             return false;
@@ -200,7 +180,9 @@ static UA_Boolean checkTestData(UA_Boolean inverse, UA_DateTime *dataA, struct R
     return true;
 }
 
-static UA_Boolean checkModifiedData(UA_DateTime *dataA, size_t dataASize, struct ReceiveTupel *dataB, size_t dataBSize) {
+static UA_Boolean
+checkModifiedData(UA_DateTime *dataA, size_t dataASize,
+                  struct ReceiveTupel *dataB, size_t dataBSize) {
     for (size_t i = 0; i < dataBSize; ++i) {
         UA_Boolean found = UA_FALSE;
         for (size_t j = 0; j < dataASize; ++j) {
@@ -239,8 +221,7 @@ receiveCallback(UA_Client *clt,
     return true;
 }
 
-START_TEST(Client_HistorizingReadRawAll)
-{
+START_TEST(Client_HistorizingReadRawAll) {
     UA_StatusCode ret = UA_Client_HistoryRead_raw(client,
                                                   &outNodeId,
                                                   receiveCallback,
@@ -258,8 +239,7 @@ START_TEST(Client_HistorizingReadRawAll)
 }
 END_TEST
 
-START_TEST(Client_HistorizingReadRawOne)
-{
+START_TEST(Client_HistorizingReadRawOne) {
     UA_StatusCode ret = UA_Client_HistoryRead_raw(client,
                                                   &outNodeId,
                                                   receiveCallback,
@@ -374,7 +354,7 @@ START_TEST(Client_HistorizingInsertRawSuccess)
         fillInt64DataValue(testInsertDataSuccess[i], 0, &value);
         ret = UA_Client_HistoryUpdate_insert(client, &outNodeId, &value);
         ck_assert_str_eq(UA_StatusCode_name(ret), UA_StatusCode_name(UA_STATUSCODE_GOOD));
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     // check result
     ret = UA_Client_HistoryRead_raw(client,
@@ -417,7 +397,7 @@ START_TEST(Client_HistorizingReplaceRawSuccess)
         fillInt64DataValue(testReplaceDataSuccess[i], 0, &value);
         ret = UA_Client_HistoryUpdate_replace(client, &outNodeId, &value);
         ck_assert_str_eq(UA_StatusCode_name(ret), UA_StatusCode_name(UA_STATUSCODE_GOOD));
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     // check result
     ret = UA_Client_HistoryRead_raw(client,
@@ -460,7 +440,7 @@ START_TEST(Client_HistorizingUpdateRawSuccess)
         fillInt64DataValue(testInsertDataSuccess[i], 0, &value);
         ret = UA_Client_HistoryUpdate_update(client, &outNodeId, &value);
         ck_assert_str_eq(UA_StatusCode_name(ret), UA_StatusCode_name(UA_STATUSCODE_GOODENTRYINSERTED));
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     // replace values to the database
     for (size_t i = 0; i < testReplaceDataSuccessSize; ++i) {
@@ -468,7 +448,7 @@ START_TEST(Client_HistorizingUpdateRawSuccess)
         fillInt64DataValue(testReplaceDataSuccess[i], 0, &value);
         ret = UA_Client_HistoryUpdate_update(client, &outNodeId, &value);
         ck_assert_str_eq(UA_StatusCode_name(ret), UA_StatusCode_name(UA_STATUSCODE_GOODENTRYREPLACED));
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     // check result
     ret = UA_Client_HistoryRead_raw(client,
@@ -570,7 +550,7 @@ START_TEST(Client_HistorizingInsertRawFail)
         fillInt64DataValue(testReplaceDataSuccess[i], 0, &value);
         ret = UA_Client_HistoryUpdate_insert(client, &outNodeId, &value);
         ck_assert_str_eq(UA_StatusCode_name(ret), UA_StatusCode_name(UA_STATUSCODE_BADENTRYEXISTS));
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     // check result
     ret = UA_Client_HistoryRead_raw(client,
@@ -613,7 +593,7 @@ START_TEST(Client_HistorizingReplaceRawFail)
         fillInt64DataValue(testInsertDataSuccess[i], 0, &value);
         ret = UA_Client_HistoryUpdate_replace(client, &outNodeId, &value);
         ck_assert_str_eq(UA_StatusCode_name(ret), UA_StatusCode_name(UA_STATUSCODE_BADNOENTRYEXISTS));
-        UA_DataValue_deleteMembers(&value);
+        UA_DataValue_clear(&value);
     }
     // check result
     ret = UA_Client_HistoryRead_raw(client,
@@ -634,14 +614,11 @@ START_TEST(Client_HistorizingReplaceRawFail)
 }
 END_TEST
 
-#endif /*UA_ENABLE_HISTORIZING*/
-
-static Suite* testSuite_Client(void)
-{
+static Suite *
+testSuite_Client(void) {
     Suite *s = suite_create("Client Historical Data");
     TCase *tc_client = tcase_create("Client Historical Data read_raw");
     tcase_add_checked_fixture(tc_client, setup, teardown);
-#ifdef UA_ENABLE_HISTORIZING
     tcase_add_test(tc_client, Client_HistorizingReadRawAll);
     tcase_add_test(tc_client, Client_HistorizingReadRawOne);
     tcase_add_test(tc_client, Client_HistorizingReadRawTwo);
@@ -654,14 +631,11 @@ static Suite* testSuite_Client(void)
     tcase_add_test(tc_client, Client_HistorizingDeleteRaw);
     tcase_add_test(tc_client, Client_HistorizingInsertRawFail);
     tcase_add_test(tc_client, Client_HistorizingReplaceRawFail);
-#endif /* UA_ENABLE_HISTORIZING */
     suite_add_tcase(s, tc_client);
-
     return s;
 }
 
-int main(void)
-{
+int main(void) {
     Suite *s = testSuite_Client();
     SRunner *sr = srunner_create(s);
     srunner_set_fork_status(sr, CK_NOFORK);

@@ -116,3 +116,10 @@ ServerStatusDataType
 ServerState
 ServerDiagnosticsSummaryDataType
 RedundancySupport
+KeyValuePair
+NamingRuleType
+CancelRequest
+CancelResponse
+TrustListDataType
+TrustListMasks
+TrustListMasks_EnumValues

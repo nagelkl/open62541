@@ -12,6 +12,7 @@
 #include "ua_pubsub_networkmessage.h"
 
 #include <check.h>
+#include <stdlib.h>
 
 START_TEST(UA_PubSub_EncodeAllOptionalFields) {
     UA_NetworkMessage m;
@@ -34,8 +35,8 @@ START_TEST(UA_PubSub_EncodeAllOptionalFields) {
 
     /* enable publisherId */
     m.publisherIdEnabled = true;
-    m.publisherIdType = UA_PUBLISHERDATATYPE_UINT16;
-    m.publisherId.publisherIdUInt16 = 65535;
+    m.publisherId.idType = UA_PUBLISHERIDTYPE_UINT16;
+    m.publisherId.id.uint16 = 65535;
 
     /* enable dataSetClassId */
     m.dataSetClassIdEnabled = true;
@@ -80,8 +81,8 @@ START_TEST(UA_PubSub_EncodeAllOptionalFields) {
     UA_Variant_setScalarCopy(&m.payload.dataSetPayload.dataSetMessages[0].data.keyFrameData.dataSetFields[0].value, &iv, &UA_TYPES[UA_TYPES_UINT32]);
     m.payload.dataSetPayload.dataSetMessages[0].data.keyFrameData.dataSetFields[0].hasValue = true;
 
-    size_t size = UA_NetworkMessage_calcSizeJson(&m, NULL, 0, NULL, 0, true);
-    ck_assert_int_eq(size, 342);
+    size_t size = UA_NetworkMessage_calcSizeJsonInternal(&m, NULL, 0, NULL, 0, true);
+    ck_assert_uint_eq(size, 340);
 
     UA_ByteString buffer;
     UA_StatusCode rv = UA_ByteString_allocBuffer(&buffer, size+1);
@@ -92,16 +93,16 @@ START_TEST(UA_PubSub_EncodeAllOptionalFields) {
     const UA_Byte *bufEnd = &(buffer.data[buffer.length]);
 
 
-    rv = UA_NetworkMessage_encodeJson(&m, &bufPos, &bufEnd, NULL, 0, NULL, 0, true);
+    rv = UA_NetworkMessage_encodeJsonInternal(&m, &bufPos, &bufEnd, NULL, 0, NULL, 0, true);
     *bufPos = 0;
     // then
     ck_assert_int_eq(rv, UA_STATUSCODE_GOOD);
 
-    char* result = "{\"MessageId\":\"ABCDEFGH\",\"MessageType\":\"ua-data\",\"PublisherId\":65535,\"DataSetClassId\":\"00000001-0002-0003-0000-000000000000\",\"Messages\":[{\"DataSetWriterId\":12345,\"SequenceNumber\":4711,\"MetaDataVersion\":{\"MajorVersion\":42,\"MinorVersion\":7},\"Timestamp\":\"1601-01-13T20:38:31.1111111Z\",\"Status\":2764857,\"Payload\":{\"Field1\":{\"Type\":7,\"Body\":27}}}]}";
+    char* result = "{\"MessageId\":\"ABCDEFGH\",\"MessageType\":\"ua-data\",\"PublisherId\":65535,\"DataSetClassId\":\"00000001-0002-0003-0000-000000000000\",\"Messages\":[{\"DataSetWriterId\":12345,\"SequenceNumber\":4711,\"MetaDataVersion\":{\"MajorVersion\":42,\"MinorVersion\":7},\"Timestamp\":\"1601-01-13T20:38:31.1111111Z\",\"Status\":12345,\"Payload\":{\"Field1\":{\"Type\":7,\"Body\":27}}}]}";
     ck_assert_str_eq(result, (char*)buffer.data);
 
-    UA_ByteString_deleteMembers(&buffer);
-    UA_NetworkMessage_deleteMembers(&m);
+    UA_ByteString_clear(&buffer);
+    UA_NetworkMessage_clear(&m);
 }
 END_TEST
 
@@ -164,7 +165,7 @@ START_TEST(UA_PubSub_EnDecode) {
     UA_Variant_setScalarCopy(&m.payload.dataSetPayload.dataSetMessages[1].data.keyFrameData.dataSetFields[1].value, &iv64, &UA_TYPES[UA_TYPES_INT64]);
     m.payload.dataSetPayload.dataSetMessages[1].data.keyFrameData.dataSetFields[1].hasValue = true;
 
-    size_t size = UA_NetworkMessage_calcSizeJson(&m, NULL, 0, NULL, 0, true);
+    size_t size = UA_NetworkMessage_calcSizeJsonInternal(&m, NULL, 0, NULL, 0, true);
 
     UA_ByteString buffer;
     UA_StatusCode rv = UA_ByteString_allocBuffer(&buffer, size);
@@ -174,14 +175,14 @@ START_TEST(UA_PubSub_EnDecode) {
     memset(bufPos, 0, size);
     const UA_Byte *bufEnd = &(buffer.data[buffer.length]);
 
-    rv = UA_NetworkMessage_encodeJson(&m, &bufPos, &bufEnd, NULL, 0, NULL, 0, true);
+    rv = UA_NetworkMessage_encodeJsonInternal(&m, &bufPos, &bufEnd, NULL, 0, NULL, 0, true);
     //*bufPos = 0;
     // then
     ck_assert_int_eq(rv, UA_STATUSCODE_GOOD);
 
     UA_NetworkMessage m2;
     memset(&m2, 0, sizeof(UA_NetworkMessage));
-    rv = UA_NetworkMessage_decodeJson(&m2, &buffer);
+    rv = UA_NetworkMessage_decodeJson(&buffer, &m2, NULL);
     ck_assert_int_eq(rv, UA_STATUSCODE_GOOD);
     ck_assert(m.networkMessageType == m2.networkMessageType);
     ck_assert(m.timestampEnabled == m2.timestampEnabled);
@@ -205,9 +206,9 @@ START_TEST(UA_PubSub_EnDecode) {
 
     ck_assert(m.payload.dataSetPayload.dataSetMessages[1].header.dataSetMessageValid == m2.payload.dataSetPayload.dataSetMessages[1].header.dataSetMessageValid);
     ck_assert(m.payload.dataSetPayload.dataSetMessages[1].data.deltaFrameData.deltaFrameFields[0].fieldValue.hasSourceTimestamp == m2.payload.dataSetPayload.dataSetMessages[1].data.deltaFrameData.deltaFrameFields[0].fieldValue.hasSourceTimestamp);
-    UA_ByteString_deleteMembers(&buffer);
-    UA_NetworkMessage_deleteMembers(&m);
-    UA_NetworkMessage_deleteMembers(&m2);
+    UA_ByteString_clear(&buffer);
+    UA_NetworkMessage_clear(&m);
+    UA_NetworkMessage_clear(&m2);
 }
 END_TEST
 
@@ -217,7 +218,7 @@ START_TEST(UA_NetworkMessage_oneMessage_twoFields_json_decode) {
     UA_NetworkMessage out;
     UA_ByteString buf = UA_STRING("{\"MessageId\":\"5ED82C10-50BB-CD07-0120-22521081E8EE\",\"MessageType\":\"ua-data\",\"Messages\":[{\"DataSetWriterId\":62541,\"MetaDataVersion\":{\"MajorVersion\":1478393530,\"MinorVersion\":12345},\"SequenceNumber\":4711,\"Payload\":{\"Test\":{\"Type\":5,\"Body\":42},\"Server localtime\":{\"Type\":13,\"Body\":\"2018-06-05T05:58:36.000Z\"}}}]}");
     // when
-    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&out, &buf);
+    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&buf, &out, NULL);
     // then
     ck_assert_int_eq(retval, UA_STATUSCODE_GOOD);
 
@@ -267,7 +268,7 @@ START_TEST(UA_NetworkMessage_oneMessage_twoFields_json_decode) {
     ck_assert_int_eq(dts.microSec, 0);
     ck_assert_int_eq(dts.nanoSec, 0);
 
-    UA_NetworkMessage_deleteMembers(&out);
+    UA_NetworkMessage_clear(&out);
 }
 END_TEST
 
@@ -278,7 +279,7 @@ START_TEST(UA_NetworkMessage_json_decode) {
     memset(&out,0,sizeof(UA_NetworkMessage));
     UA_ByteString buf = UA_STRING("{\"MessageId\":\"5ED82C10-50BB-CD07-0120-22521081E8EE\",\"MessageType\":\"ua-data\",\"Messages\":[{\"MetaDataVersion\":{\"MajorVersion\": 47, \"MinorVersion\": 47},\"DataSetWriterId\":62541,\"Status\":22,\"SequenceNumber\":4711,\"Payload\":{\"Test\":{\"Type\":5,\"Body\":42},\"Server localtime\":{\"Type\":1,\"Body\":true}}}]}");
     // when
-    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&out, &buf);
+    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&buf, &out, NULL);
     // then
     ck_assert_int_eq(retval, UA_STATUSCODE_GOOD);
 
@@ -320,7 +321,7 @@ START_TEST(UA_NetworkMessage_json_decode) {
     ck_assert_int_eq(out.payload.dataSetPayload.dataSetMessages[0].data.keyFrameData.dataSetFields[1].hasValue, true);
     ck_assert_int_eq(*((UA_Boolean*)out.payload.dataSetPayload.dataSetMessages[0].data.keyFrameData.dataSetFields[1].value.data), 1);
 
-    UA_NetworkMessage_deleteMembers(&out);
+    UA_NetworkMessage_clear(&out);
 }
 END_TEST
 
@@ -334,14 +335,14 @@ START_TEST(UA_Networkmessage_DataSetFieldsNull_json_decode) {
             "[    {      \"DataSetWriterId\": 1,      \"SequenceNumber\": 224,     \"MetaDataVersion\": "
             "{        \"MajorVersion\": 1,        \"MinorVersion\": 1      },\"Payload\":null}]}");
     // when
-    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&out, &buf);
+    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&buf, &out, NULL);
     // then
     ck_assert_int_eq(retval, UA_STATUSCODE_GOOD);
     ck_assert_int_eq(out.dataSetClassId.data1, 5);
     ck_assert_int_eq(out.payload.dataSetPayload.dataSetMessages->header.dataSetMessageSequenceNr, 224);
     ck_assert_ptr_eq(out.payload.dataSetPayload.dataSetMessages->data.keyFrameData.dataSetFields, NULL);
 
-    UA_NetworkMessage_deleteMembers(&out);
+    UA_NetworkMessage_clear(&out);
 }
 END_TEST
 
@@ -356,7 +357,7 @@ START_TEST(UA_NetworkMessage_fieldNames_json_decode) {
             "\"SequenceNumber\":4711,\"Payload\":{\"Test\":{\"Type\":5,\"Body\":42},\"Test2\":"
             "{\"Type\":13,\"Body\":\"2018-06-05T05:58:36.000Z\"}}}]}");
     // when
-    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&out, &buf);
+    UA_StatusCode retval = UA_NetworkMessage_decodeJson(&buf, &out, NULL);
     // then
     ck_assert_int_eq(retval, UA_STATUSCODE_GOOD);
 
@@ -371,7 +372,7 @@ START_TEST(UA_NetworkMessage_fieldNames_json_decode) {
     ck_assert_int_eq(out.payload.dataSetPayload.dataSetMessages[0].data.keyFrameData.fieldNames[1].data[3], 't');
     ck_assert_int_eq(out.payload.dataSetPayload.dataSetMessages[0].data.keyFrameData.fieldNames[1].data[4], '2');
 
-    UA_NetworkMessage_deleteMembers(&out);
+    UA_NetworkMessage_clear(&out);
 }
 END_TEST
 

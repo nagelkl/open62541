@@ -7,19 +7,7 @@
 
 /* To avoid zero timestamp value in header, the testingClock
  * is assigned with non-zero timestamp to pass unit tests */
-UA_DateTime testingClock = 0x5C8F735D;
-
-UA_DateTime UA_DateTime_now(void) {
-    return testingClock;
-}
-
-UA_DateTime UA_DateTime_nowMonotonic(void) {
-    return testingClock;
-}
-
-UA_DateTime UA_DateTime_localTimeUtcOffset(void) {
-    return 0;
-}
+static UA_DateTime testingClock = 0x5C8F735D;
 
 void
 UA_fakeSleep(UA_UInt32 duration) {
@@ -37,16 +25,12 @@ UA_realSleep(UA_UInt32 duration) {
     UA_UInt32 sec = duration / 1000;
     UA_UInt32 ns = (duration % 1000) * NANO_SECOND_MULTIPLIER;
     struct timespec sleepValue;
-    sleepValue.tv_sec = sec;
-    sleepValue.tv_nsec = ns;
+    sleepValue.tv_sec = (int)sec;
+    sleepValue.tv_nsec = (int)ns;
     nanosleep(&sleepValue, NULL);
 #endif
 }
 
-/* Defined for the architecture via
- * add_definitions(-DUA_sleep_ms=UA_comboSleep) */
-void
-UA_comboSleep(unsigned long duration) {
-    UA_fakeSleep((UA_UInt32)duration);
-    UA_realSleep((UA_UInt32)duration);
+UA_DateTime UA_DateTime_now_fake(UA_EventLoop *el) {
+    return testingClock;
 }

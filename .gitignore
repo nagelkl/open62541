@@ -70,17 +70,28 @@ tests/check_encode
 tests/check_memory
 tests/check_namespace
 tests/coverage
+tests/**/CMakeFiles
+Testing
 Makefile
 /CMakeCache.txt
 /CMakeFiles/
 /cmake_install.cmake
+doc/
+doc_src/
+examples/
 /exampleClient
 /exampleClient_legacy
 /src_generated/
-/build
-/.idea
+**/build
 /cmake-build*
 /tools/certs/certs/*
 Pipfile
 Pipfile.lock
 .vscode
+**/libxml2
+
+# clangd cache
+.cache/
+
+# project local vim settings
+.vim/

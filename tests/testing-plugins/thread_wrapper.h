@@ -6,7 +6,7 @@
 
 /* Threads */
 
-#ifndef WIN32
+#ifndef _WIN32
 #include <pthread.h>
 #define THREAD_HANDLE pthread_t
 #define THREAD_CREATE(handle, callback) pthread_create(&handle, NULL, callback, NULL)
@@ -31,7 +31,7 @@
 /* Windows returns non-zero on success and pthread returns zero,
  * so compare to zero to achieve consistent return values */
 
-#ifndef WIN32
+#ifndef _WIN32
 #define MUTEX_HANDLE pthread_mutex_t
 
 /* Will return UA_TRUE when zero */
@@ -45,8 +45,8 @@
 #define MUTEX_HANDLE HANDLE
 
 /* Will return UA_FALSE when zero */
-#define MUTEX_INIT(name) (CreateMutex(NULL, FALSE, NULL) != 0)
-#define MUTEX_LOCK(name) (WaitForSingleObject((name), INFINITE) != 0)
+#define MUTEX_INIT(name) (((name) = CreateMutex(NULL, FALSE, NULL)) != 0)
+#define MUTEX_LOCK(name) (WaitForSingleObject((name), INFINITE) == WAIT_OBJECT_0)
 #define MUTEX_UNLOCK(name) (ReleaseMutex((name)) != 0)
 #define MUTEX_DESTROY(name) (CloseHandle((name)) != 0)
 #endif
